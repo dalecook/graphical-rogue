@@ -1964,6 +1964,7 @@ class Game(object):
         self.firstmove = False
         self.seenstairs = False
         self.take = 0
+        self.move_on = False
         self.n_objs = 0
         self.runch = ' '
         self.dir_ch = ' '
@@ -4071,8 +4072,15 @@ def check_level(game):
 
 
 def raise_level(game):
-    """potions.c -- bump experience to the next level threshold."""
-    game.pstats.s_exp = E_LEVELS[game.pstats.s_lvl - 1] + 1
+    """potions.c:294 -- bump experience to the next level threshold.
+
+    The C's e_levels[] has a trailing 0 sentinel, so at the level cap of 21
+    it reads that 0 and sets experience to 1.  E_LEVELS here holds only the
+    20 real thresholds, so the sentinel has to be supplied or this indexes
+    off the end and raises IndexError.
+    """
+    i = game.pstats.s_lvl - 1
+    game.pstats.s_exp = (E_LEVELS[i] if i < len(E_LEVELS) else 0) + 1
     check_level(game)
 
 
@@ -4756,11 +4764,13 @@ def inventory(game, lst, type_ch):
     game.n_objs = 0
     for item in lst:
         if type_ch and type_ch != item.o_type:
-            if not (type_ch == CALLABLE and item.o_type != FOOD
-                    and item.o_type != AMULET):
-                if not (type_ch == R_OR_S
-                        and item.o_type in (RING, STICK)):
-                    continue
+            # pack.c:252 -- CALLABLE means the four namable classes, not
+            # "anything that isn't food or the amulet"
+            callable_ok = (type_ch == CALLABLE
+                           and item.o_type in (SCROLL, POTION, RING, STICK))
+            r_or_s_ok = (type_ch == R_OR_S and item.o_type in (RING, STICK))
+            if not callable_ok and not r_or_s_ok:
+                continue
         game.n_objs += 1
         lines.append("%c) %s" % (item.o_packch, inv_name(game, item, False)))
     if game.n_objs == 0:
@@ -4871,6 +4881,70 @@ def nothing(game, type_ch):
     tystr = {POTION: "potion", SCROLL: "scroll",
              RING: "ring", STICK: "stick"}.get(type_ch, "thing")
     return base + " about any %ss" % tystr
+
+
+# ---------------------------------------------------------------------------
+# wizard.c -- identification
+# ---------------------------------------------------------------------------
+
+TYPE_NAMES = {                  # wizard.c:100
+    POTION: "potion",
+    SCROLL: "scroll",
+    FOOD: "food",
+    R_OR_S: "ring, wand or staff",
+    RING: "ring",
+    STICK: "wand or staff",
+    WEAPON: "weapon",
+    ARMOR: "armor",
+}
+
+
+def type_name(type_ch):
+    """wizard.c:100"""
+    return TYPE_NAMES.get(type_ch, "thing")
+
+
+def set_know(game, obj, info):
+    """wizard.c:81 -- set things up when we really know what a thing is."""
+    info[obj.o_which].oi_know = True
+    obj.o_flags |= ISKNOW
+    info[obj.o_which].oi_guess = None
+
+
+def identify_obj(game, obj):
+    """wizard.c:58 -- the business half of whatis(): learn what obj is."""
+    if obj is None:
+        return
+    t = obj.o_type
+    if t == SCROLL:
+        set_know(game, obj, game.scr_info)
+    elif t == POTION:
+        set_know(game, obj, game.pot_info)
+    elif t == STICK:
+        set_know(game, obj, game.ws_info)
+    elif t in (WEAPON, ARMOR):
+        obj.o_flags |= ISKNOW
+    elif t == RING:
+        set_know(game, obj, game.ring_info)
+    msg(game, inv_name(game, obj, False))
+
+
+def call_it(game, obj, name):
+    """misc.c:546 -- name an unidentified item class."""
+    if obj is None:
+        return
+    t = obj.o_type
+    info = {POTION: game.pot_info, SCROLL: game.scr_info,
+            RING: game.ring_info, STICK: game.ws_info}.get(t)
+    if info is None:
+        msg(game, "you can't call that anything")
+        return
+    entry = info[obj.o_which]
+    if entry.oi_know:
+        msg(game, "that has already been identified")
+        return
+    entry.oi_guess = name
+    msg(game, "called %s" % name)
 
 
 # ---------------------------------------------------------------------------
@@ -5154,7 +5228,7 @@ def read_scroll(game, obj):
             if not (0 <= x < NUMCOLS):
                 continue
             for y in range(game.hero.y - 2, game.hero.y + 3):
-                if not (0 <= y <= NUMLINES - 1):
+                if not (0 <= y < NUMLINES - 1):     # scrolls.c:73
                     continue
                 mon = game.moat(y, x)
                 if mon is not None and on(mon, ISRUN):
@@ -5209,6 +5283,9 @@ def read_scroll(game, obj):
                    S_ID_R_OR_S: R_OR_S}
         game.scr_info[w].oi_know = True
         msg(game, "this scroll is an %s scroll" % game.scr_info[w].oi_name)
+        # scrolls.c:158 calls whatis(TRUE, type), which prompts for an item.
+        # The loop can't prompt from here, so it records what to ask for and
+        # the loop picks it up when read_scroll returns.
         game.pending_whatis = id_type[w]
     elif w == S_MAP:
         magic_map(game)
@@ -5523,7 +5600,10 @@ def fall(game, obj, pr):
         if game.has_hit:
             endmsg(game)
             game.has_hit = False
-        name = game.weap_names[obj.o_which] if obj.o_type == WEAPON else "item"
+        if obj.o_type == WEAPON:
+            name = game.weap_names[obj.o_which]
+        else:
+            name = inv_name(game, obj, True)
         msg(game, "the %s vanishes as it hits the ground" % name)
 
 
@@ -6127,27 +6207,33 @@ def rndmove(game, who):
 
 
 def teleport(game):
-    """command.c -- teleport the hero to a random spot on the level."""
+    """wizard.c:200 -- teleport the hero to a random spot on the level."""
     scr = game.screen
-    new_pos = Coord()
-    was = game.hero.copy()
-    while True:
-        find_floor(game, None, new_pos, 0, True)
-        if new_pos != game.hero:
-            break
-    scr.mvaddch(was.y, was.x, floor_at(game))
-    if game.flat(was.y, was.x) & F_PASS:
-        rp = game.passages[game.flat(was.y, was.x) & F_PNUM]
-        if rp is game.proom:
-            pass
-    game.hero.set(new_pos)
-    game.oldpos.set(game.hero)
-    game.oldrp = game.proom = roomin(game, game.hero)
-    enter_room(game, game.hero)
+    c = Coord()
+    scr.mvaddch(game.hero.y, game.hero.x, floor_at(game))
+    find_floor(game, None, c, 0, True)
+    if roomin(game, c) is not game.proom:
+        leave_room(game, game.hero)
+        game.hero.set(c)
+        enter_room(game, game.hero)
+    else:
+        game.hero.set(c)
+        look(game, True)
     scr.mvaddch(game.hero.y, game.hero.x, PLAYER)
+    # turn off ISHELD in case teleportation happened while fighting a flytrap.
+    # Without this the hero stays held with the flytrap now across the level,
+    # unkillable, and every subsequent move prints "you are being held" --
+    # an unrecoverable soft-lock.  wizard.c:222
+    if on(game.player, ISHELD):
+        game.player.t_flags &= ~ISHELD
+        game.vf_hit = 0
+        MONSTERS[ord('F') - ord('A')]['dmg'] = "000x0"
+    game.no_move = 0
     game.count = 0
     game.running = False
     game.to_death = False
+    game.oldpos.set(game.hero)
+    game.oldrp = game.proom
 
 
 def search(game):
@@ -6814,6 +6900,9 @@ KILL_NAMES = {
     's': ("starvation", False),
 }
 
+# command.c:120 -- commands a repeat count applies to
+COUNTABLE = set(".abhjklmnqrstuyzBCHIJKLNUY")
+
 MOVE_KEYS = {
     'h': (0, -1), 'j': (1, 0), 'k': (-1, 0), 'l': (0, 1),
     'y': (-1, -1), 'u': (-1, 1), 'b': (1, -1), 'n': (1, 1),
@@ -6921,9 +7010,12 @@ class GameLoop(object):
         # that needs a follow-up key parks a continuation here instead.
         self.pending = None         # (kind, callback, extra)
         self.moves_left = 0         # remaining iterations of command()'s ntimes loop
-        self.count = 0
+        self.count = 0              # repeat-count prefix
         self.countch = None
+        self.collecting_count = False
+        self.again = False
         self.last_dir = None
+        self.text_buf = ""
 
     # -- input -------------------------------------------------------------
 
@@ -6945,6 +7037,9 @@ class GameLoop(object):
             kind, cb = self.pending[0], self.pending[1]
             if ch == chr(ESCAPE):
                 self.pending = None
+                self.text_buf = ""
+                if self.renderer is not None:
+                    self.renderer.clear_overlay()
                 game.after = False
                 msg(game, "")
                 return False
@@ -6994,6 +7089,34 @@ class GameLoop(object):
             if kind == 'confirm':
                 self.pending = None
                 return self.finish(cb, ch.lower() == 'y')
+            if kind == 'symbol':
+                self.pending = None
+                cb(ch)
+                return False
+            if kind == 'option':
+                if ch == ' ':
+                    self.pending = None
+                    if self.renderer is not None:
+                        self.renderer.clear_overlay()
+                    return False
+                cb(ch)
+                return False
+            if kind == 'text':
+                # a free-text prompt, for naming an unidentified item.
+                # chr(13)/chr(10) are Enter, chr(8) is Backspace.
+                if ch in (chr(13), chr(10)):
+                    name = self.text_buf
+                    self.text_buf = ""
+                    self.pending = None
+                    if name:
+                        cb(name)
+                    return False
+                if ch == chr(8):
+                    self.text_buf = self.text_buf[:-1]
+                else:
+                    self.text_buf += ch
+                msg(game, "call it: %s" % self.text_buf)
+                return False
             self.pending = None
             return False
 
@@ -7016,11 +7139,35 @@ class GameLoop(object):
         self.pending = ('confirm', cb, None)
 
     def finish(self, cb, value):
-        """Run a parked continuation, then close out the turn it belongs to."""
+        """Run a parked continuation, then close out the turn it belongs to.
+
+        A continuation may itself park another prompt -- `z` and `t` ask for
+        a direction and THEN an item.  Closing the turn here in that case
+        would charge two turns for one command, giving every monster a free
+        move and burning a turn off every active fuse.
+        """
         game = self.game
         game.after = True
         cb(value)
+        if self.pending is not None:
+            return False            # another prompt was parked; not done yet
+        self.consume_pending_whatis()
+        if self.pending is not None:
+            return False            # now waiting for the identify target
         return self.end_turn()
+
+    def consume_pending_whatis(self):
+        """A scroll of identify asked for something to identify."""
+        game = self.game
+        if game.pending_whatis is None:
+            return
+        type_ch = game.pending_whatis
+        game.pending_whatis = None
+        if not game.pack:
+            msg(game, "you don't have anything in your pack to identify")
+            return
+        self.ask_item("identify", type_ch,
+                      lambda o: identify_obj(game, o))
 
     # -- the turn ----------------------------------------------------------
 
@@ -7096,8 +7243,42 @@ class GameLoop(object):
                 game.player.t_flags |= ISRUN
                 msg(game, "you can move again")
             c = '.'
+        elif self.collecting_count:
+            # command.c:101 -- the C sits in `while (isdigit(ch))` reading
+            # more characters.  An event loop can't block, so the digit state
+            # persists across keypresses instead.
+            if ch.isdigit():
+                self.count = min(255, self.count * 10 + int(ch))
+                game.after = False
+                return False
+            self.collecting_count = False
+            self.countch = ch
+            if ch not in COUNTABLE:
+                self.count = 0          # a count makes no sense for this one
+            c = ch
+        elif self.count and not game.running:
+            c = self.countch
         else:
             c = ch
+            if c.isdigit():
+                self.count = int(c)
+                self.collecting_count = True
+                game.after = False
+                return False
+
+        if self.count and not game.running:
+            self.count -= 1
+
+        # command.c:145 -- remember the command for `a` (again)
+        if (c != 'a' and c != chr(ESCAPE)
+                and not (game.running or self.count or game.to_death)):
+            game.l_last_comm = game.last_comm
+            game.l_last_dir = game.last_dir
+            game.l_last_pick = game.last_pick
+            game.last_comm = c
+            game.last_dir = ''
+            game.last_pick = None
+
         self.dispatch(c)
         if self.pending is not None:
             return False                # waiting on a follow-up key
@@ -7119,6 +7300,17 @@ class GameLoop(object):
             dy, dx = MOVE_KEYS[low]
             do_move(game, dy, dx)
             return
+        if len(ch) == 1 and 1 <= ord(ch) <= 26:
+            # control-letter: run, but stop at doors.  command.c:203
+            low = chr(ord(ch) - 1 + ord('a'))
+            if low in MOVE_KEYS:
+                if not on(game.player, ISBLIND):
+                    game.door_stop = True
+                    game.firstmove = True
+                do_run(game, low)
+                dy, dx = MOVE_KEYS[low]
+                do_move(game, dy, dx)
+                return
 
         if ch == ',':
             obj = find_obj(game, game.hero.y, game.hero.x)
@@ -7175,10 +7367,15 @@ class GameLoop(object):
             if lines and r is not None:
                 r.show_overlay(lines, "Inventory")
         elif ch == 'I':
+            # pack.c:352 -- picky_inven(): describe one item
             game.after = False
-            lines = inventory(game, game.pack, 0)
-            if lines and r is not None:
-                r.show_overlay(lines, "Inventory")
+            if not game.pack:
+                msg(game, "you aren't carrying anything")
+            elif len(game.pack) == 1:
+                msg(game, "a) %s" % inv_name(game, game.pack[0], False))
+            else:
+                self.pending = ('symbol', self._picky_inven, None)
+                msg(game, "which item do you wish to inventory: ")
         elif ch == 'D':
             game.after = False
             lines = []
@@ -7210,11 +7407,48 @@ class GameLoop(object):
         elif ch == 'v':
             game.after = False
             msg(game, "version %s (pygame port)" % RELEASE)
+        elif ch in ('f', 'F'):
+            # command.c:222 -- fight an adjacent monster, F to the death
+            if ch == 'F':
+                game.kamikaze = True
+            self.ask_dir(self._fight_dir)
+        elif ch == 'a':
+            # command.c:250 -- repeat the last command
+            if not game.last_comm or game.last_comm == ' ':
+                msg(game, "you haven't typed a command yet")
+                game.after = False
+            else:
+                self.again = True
+                self.dispatch(game.last_comm)
+                self.again = False
+        elif ch == 'c':
+            game.after = False
+            self.ask_item("call", CALLABLE, self._call_item)
+        elif ch == '/':
+            game.after = False
+            self.pending = ('symbol', self._identify_symbol, None)
+            msg(game, "what do you want identified? ")
+        elif ch == 'm':
+            # command.c:345 -- move onto something without picking it up
+            game.move_on = True
+            self.ask_dir(self._move_on_dir)
+        elif ch == '@':
+            game.after = False
+            self._status_msg()
+        elif ch == 'o':
+            game.after = False
+            if r is not None:
+                r.show_overlay(self._option_lines(), "Options")
+            self.pending = ('option', self._toggle_option, None)
         elif ch == chr(ESCAPE):
             game.door_stop = False
+            game.count = 0
             game.after = False
         else:
+            # command.c:illcom
             game.after = False
+            game.count = 0
+            msg(game, "illegal command '%s'" % ch)
 
     # -- command continuations --------------------------------------------
 
@@ -7256,6 +7490,99 @@ class GameLoop(object):
             self.game.win = False
             self.game.death_reason = "quitting"
 
+    def _fight_dir(self, delta):
+        """command.c:222 -- lock onto an adjacent monster and keep swinging."""
+        game = self.game
+        y = game.hero.y + game.delta.y
+        x = game.hero.x + game.delta.x
+        if not game.in_bounds(y, x):
+            msg(game, "no monster there")
+            game.after = False
+            game.kamikaze = False
+            return
+        mp = game.moat(y, x)
+        if mp is None or (not see_monst(game, mp)
+                          and not on(game.player, SEEMONST)):
+            if not game.terse:
+                addmsg(game, "I see ")
+            msg(game, "no monster there")
+            game.after = False
+            game.kamikaze = False
+        elif diag_ok(game, game.hero, Coord(x, y)):
+            game.to_death = True
+            game.max_hit = 0
+            mp.t_flags |= ISTARGET
+            game.runch = game.dir_ch
+            do_move(game, game.delta.y, game.delta.x)
+
+    def _move_on_dir(self, delta):
+        game = self.game
+        do_move(game, game.delta.y, game.delta.x)
+        game.move_on = False
+
+    def _call_item(self, obj):
+        game = self.game
+        if obj is None:
+            return
+        self.pending = ('text', lambda t: call_it(game, obj, t), "")
+        msg(game, "what do you want to call it? ")
+
+    def _identify_symbol(self, ch):
+        """command.c -- identify() : explain a map character."""
+        game = self.game
+        if isupper_ch(ch):
+            msg(game, "%s: %s" % (ch, MONSTERS[ord(ch) - ord('A')]['name']))
+            return
+        names = {
+            PASSAGE: "passage", DOOR: "door", FLOOR: "room floor",
+            PLAYER: "you", TRAP: "trap", STAIRS: "a staircase",
+            GOLD: "gold", POTION: "potion", SCROLL: "scroll",
+            FOOD: "food", WEAPON: "weapon", ARMOR: "armor",
+            AMULET: "the Amulet of Yendor", RING: "ring", STICK: "wand or staff",
+            MAGIC: "magic", VWALL: "wall of a room", HWALL: "wall of a room",
+            ' ': "solid rock",
+        }
+        msg(game, "'%s': %s" % (ch, names.get(ch, "unknown character")))
+
+    def _picky_inven(self, ch):
+        game = self.game
+        for obj in game.pack:
+            if obj.o_packch == ch:
+                msg(game, "%c) %s" % (ch, inv_name(game, obj, False)))
+                return
+        msg(game, "'%s' not in pack" % ch)
+
+    def _status_msg(self):
+        game = self.game
+        arm = (game.cur_armor.o_arm if game.cur_armor is not None
+               else game.pstats.s_arm)
+        st = game.pstats
+        msg(game, "Level: %d  Gold: %d  Hp: %d(%d)  Str: %d  Arm: %d  Exp: %d/%d %s"
+            % (game.level, game.purse, st.s_hpt, st.s_maxhp, st.s_str,
+               10 - arm, st.s_lvl, st.s_exp, HUNGER_NAMES[game.hungry_state]))
+
+    OPTIONS = (('t', 'terse', "terse messages"),
+               ('j', 'jump', "jump (skip run animation)"),
+               ('f', 'see_floor', "show the floor in dark rooms"),
+               ('p', 'passgo', "follow corridors around corners"))
+
+    def _option_lines(self):
+        game = self.game
+        out = ["press the letter to toggle, space to close", ""]
+        for key, attr, label in self.OPTIONS:
+            out.append("  %s)  %-34s %s"
+                       % (key, label, "on" if getattr(game, attr) else "off"))
+        return out
+
+    def _toggle_option(self, ch):
+        game = self.game
+        for key, attr, _label in self.OPTIONS:
+            if ch == key:
+                setattr(game, attr, not getattr(game, attr))
+                break
+        if self.renderer is not None:
+            self.renderer.show_overlay(self._option_lines(), "Options")
+
     def _current(self, cur, how):
         game = self.game
         if cur is not None:
@@ -7292,6 +7619,10 @@ def new_game(seed=None, headless=False):
     game.bolt_trail = []
     game.pending_whatis = None
     game.things = []
+    # fight.c mutates the flytrap's damage string in the global monster table.
+    # Faithful to the C, which only ever has one game per process -- but the
+    # selftest builds many, so reset it or an inflated flytrap leaks forward.
+    MONSTERS[ord('F') - ord('A')]['dmg'] = "000x0"
     # weapons.c: weap_info has a 10th row for FLAME (dragon breath/bolts)
     # whose name is written at runtime by fire_bolt.  extern.c:307
     game.weap_names = [w['name'] for w in WEAPONS] + ["flame"]
@@ -7345,6 +7676,19 @@ def event_to_char(event):
         if event.mod & pygame.KMOD_SHIFT and ch in MOVE_KEYS:
             return ch.upper()
         return ch
+    # command.c:203 -- ^H ^J ^K ^L ^Y ^U ^B ^N run until something interesting.
+    # These are control characters, so they never appear in event.unicode as
+    # printable text and were previously dropped entirely.
+    if event.mod & pygame.KMOD_CTRL:
+        name = pygame.key.name(event.key)
+        if len(name) == 1 and name.lower() in "hjklyubn":
+            return chr(ord(name.lower()) - ord('a') + 1)
+    # Enter and Backspace are needed by the free-text "call it" prompt and
+    # are below the printable range, so they need passing through explicitly.
+    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        return chr(13)
+    if event.key == pygame.K_BACKSPACE:
+        return chr(8)
     if event.unicode and 32 <= ord(event.unicode[0]) < 127:
         return event.unicode[0]
     return None
