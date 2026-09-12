@@ -2218,13 +2218,96 @@ def msg(game, text=""):
     endmsg(game)
 
 
+# The original had exactly ONE line at the top of a 24-line terminal for
+# messages, which is the whole reason --More-- exists: a second message had
+# nowhere to go, so the game stopped and waited.  That is a 1985 hardware
+# limit, not a design choice, and nothing here has to honour it.
+MSG_LINES = 2
+
+
+def wrap_text(text, width):
+    """Break a message onto as many lines as it needs.  No stdlib textwrap:
+    keeping the import list to pygame plus five modules is a stated goal."""
+    if len(text) <= width:
+        return [text]
+    lines = []
+    line = ""
+    for word in text.split(" "):
+        if not line:
+            line = word
+        elif len(line) + 1 + len(word) <= width:
+            line += " " + word
+        else:
+            lines.append(line)
+            line = word
+        while len(line) > width:            # a single word longer than a line
+            lines.append(line[:width])
+            line = line[width:]
+    if line:
+        lines.append(line)
+    return lines
+
+
+def message_layout(queue, max_lines=MSG_LINES, width=NUMCOLS):
+    """Fit as many queued messages as will go into the message area.
+
+    Short messages are PACKED onto a shared line, two spaces apart, rather
+    than each taking a line of its own -- the same thing the C does when it
+    chains with addmsg("...  ").  Rogue messages run about 30 characters and
+    the line is 80 wide, so three or four usually fit in the two rows and
+    --More-- never appears.
+
+    Returns (lines, consumed): the text to draw, and how many entries of the
+    queue it accounts for.  A message is shown whole or not at all.
+    """
+    out = []
+    cur = ['']
+    consumed = 0
+
+    def flush():
+        if cur[0]:
+            out.append(cur[0])
+            cur[0] = ''
+
+    for text in queue:
+        if not text:
+            consumed += 1               # an empty message just clears the line
+            continue
+        wrapped = wrap_text(text, width)
+        if len(wrapped) == 1:
+            piece = wrapped[0]
+            if cur[0] and len(cur[0]) + 2 + len(piece) <= width:
+                cur[0] = cur[0] + "  " + piece
+                consumed += 1
+                continue
+            if not cur[0]:
+                cur[0] = piece
+                consumed += 1
+                continue
+            flush()                     # current line is full; start another
+            if len(out) >= max_lines:
+                break
+            cur[0] = piece
+            consumed += 1
+        else:
+            flush()                     # a long message gets its own lines
+            if len(out) + len(wrapped) > max_lines:
+                break
+            out.extend(wrapped)
+            consumed += 1
+            if len(out) >= max_lines:
+                break
+    flush()
+    return out[:max_lines], consumed
+
 def unctrl(ch):
     """curses unctrl(): a PRINTABLE form of a key.
 
     The C calls this everywhere it echoes a keystroke back at the player
     (command.c:468 illcom, and the help and identify messages).  Without it a
     control character ends up inside a message string, and pygame refuses to
-    render one -- font.render("") raises "Text has zero width" -- which
+    render one -- font.render("
+") raises "Text has zero width" -- which
     takes the whole game down when that message reaches the top of the queue.
     """
     if not ch:
@@ -8464,6 +8547,14 @@ def validate_player_layers():
 MAP_TOP = 1
 MAP_BOTTOM = NUMLINES - 2
 
+# The screen BUFFER stays 24 rows, exactly as Rogue models it: row 0 for a
+# message, 1..22 for the map, 23 for the status line.  The WINDOW is taller,
+# because the message area gets MSG_LINES rows instead of one.  Buffer row r
+# is drawn at display row r + MAP_ROW_OFFSET.
+DISPLAY_LINES = MSG_LINES + (NUMLINES - 2) + 1
+MAP_ROW_OFFSET = MSG_LINES - MAP_TOP
+STATUS_ROW = DISPLAY_LINES - 1
+
 BG = (13, 14, 18)
 BG_STATUS = (20, 22, 28)
 FG_DEFAULT = (198, 202, 210)
@@ -8545,7 +8636,7 @@ class Renderer(object):
         self.cell_w = cell_w
         self.cell_h = self._cell_height(cell_w)
         w = self.cell_w * NUMCOLS
-        h = self.cell_h * NUMLINES
+        h = self.cell_h * DISPLAY_LINES
         flags = pygame.RESIZABLE
         self.screen_surf = pygame.display.set_mode((w, h), flags)
         pygame.display.set_caption("Rogue -- Exploring the Dungeons of Doom")
@@ -8648,7 +8739,7 @@ class Renderer(object):
 
     def resize(self, w, h):
         ratio = 1.5 if self.sprite_mode else 1.9
-        cell_w = max(6, min(w // NUMCOLS, int((h // NUMLINES) / ratio)))
+        cell_w = max(6, min(w // NUMCOLS, int((h // DISPLAY_LINES) / ratio)))
         if cell_w == self.cell_w:
             return
         self.cell_w = cell_w
@@ -8695,7 +8786,7 @@ class Renderer(object):
         surf.fill(BG)
 
         w = self.cell_w * NUMCOLS
-        h = self.cell_h * NUMLINES
+        h = self.cell_h * DISPLAY_LINES
         x_off = (surf.get_width() - w) // 2
         y_off = (surf.get_height() - h) // 2
 
@@ -8708,16 +8799,18 @@ class Renderer(object):
 
     def _draw_message(self, x_off, y_off):
         game = self.game
-        text = game.msg_queue[0] if game.msg_queue else ""
-        if text:
-            color = FG_MSG
+        lines, consumed = message_layout(game.msg_queue, MSG_LINES, NUMCOLS)
+        for row, text in enumerate(lines[:MSG_LINES]):
             for i, ch in enumerate(text[:NUMCOLS]):
-                self.blit_ch(ch, color, 0, i, x_off, y_off)
-            if len(game.msg_queue) > 1:
-                more = "--More--"
-                start = min(len(text) + 1, NUMCOLS - len(more))
-                for i, ch in enumerate(more):
-                    self.blit_ch(ch, FG_MORE, 0, start + i, x_off, y_off)
+                self.blit_ch(ch, FG_MSG, row, i, x_off, y_off)
+        if len(game.msg_queue) > consumed:
+            # only when the backlog genuinely outruns the area
+            more = "--More--"
+            row = min(len(lines), MSG_LINES - 1)
+            tail = len(lines[row]) + 1 if row < len(lines) else 0
+            start = max(0, min(tail, NUMCOLS - len(more)))
+            for i, ch in enumerate(more):
+                self.blit_ch(ch, FG_MORE, row, start + i, x_off, y_off)
 
     _MONSTER_LETTERS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
@@ -8741,7 +8834,7 @@ class Renderer(object):
         for row in range(MAP_TOP, MAP_BOTTOM + 1):
             line = scr.ch[row]
             so_line = scr.so[row]
-            y = y_off + row * chh
+            y = y_off + (row + MAP_ROW_OFFSET) * chh
             for col in range(NUMCOLS):
                 ch = line[col]
                 if ch == ' ':
@@ -8782,7 +8875,7 @@ class Renderer(object):
                     color = TILE_COLORS.get(ch, FG_DEFAULT)
                     if not visible:
                         color = _dim(color)
-                    self.blit_ch(ch, color, row, col, x_off, y_off)
+                    self.blit_ch(ch, color, row + MAP_ROW_OFFSET, col, x_off, y_off)
                     continue
                 surf.blit(spr, (x, y))
 
@@ -8811,7 +8904,7 @@ class Renderer(object):
                     pygame.draw.rect(
                         self.screen_surf, HILITE,
                         pygame.Rect(x_off + col * self.cell_w,
-                                    y_off + row * self.cell_h,
+                                    y_off + (row + MAP_ROW_OFFSET) * self.cell_h,
                                     self.cell_w, self.cell_h))
                     self.blit_ch(ch, TILE_COLORS[PLAYER], row, col, x_off, y_off)
                     continue
@@ -8828,11 +8921,11 @@ class Renderer(object):
                 if so_line[col]:
                     color = (min(255, color[0] + 60), min(255, color[1] + 60),
                              min(255, color[2] + 60))
-                self.blit_ch(ch, color, row, col, x_off, y_off)
+                self.blit_ch(ch, color, row + MAP_ROW_OFFSET, col, x_off, y_off)
 
     def _draw_status(self, x_off, y_off, h):
         game = self.game
-        row = NUMLINES - 1
+        row = STATUS_ROW
         pygame.draw.rect(self.screen_surf, BG_STATUS,
                          pygame.Rect(x_off, y_off + row * self.cell_h,
                                      self.cell_w * NUMCOLS, self.cell_h))
@@ -9031,8 +9124,12 @@ class GameLoop(object):
             self.renderer.clear_overlay()
             return False
 
-        if len(game.msg_queue) > 1:
-            game.msg_queue.pop(0)
+        # --More--: a keypress dismisses everything currently displayed,
+        # not just one message.  With a two-line area that is usually the
+        # whole backlog, so the prompt almost never appears.
+        shown = message_layout(game.msg_queue)[1]
+        if len(game.msg_queue) > shown:
+            del game.msg_queue[:max(1, shown)]
             return False
 
         if self.pending is not None:
