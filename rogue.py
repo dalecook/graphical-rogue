@@ -1784,7 +1784,7 @@ class Thing(object):
 
     __slots__ = ('t_pos', 't_turn', 't_type', 't_disguise', 't_oldch',
                  't_dest', 't_flags', 't_stats', 't_room', 't_pack',
-                 't_reserved', 't_dead')
+                 't_reserved', 't_dead', 't_anim')
 
     def __init__(self):
         self.t_pos = Coord()
@@ -1799,6 +1799,10 @@ class Thing(object):
         self.t_pack = []
         self.t_reserved = 0
         self.t_dead = False
+        # Display only: a per-monster phase offset so a room full of monsters
+        # doesn't flap in lockstep.  Lives on the monster rather than being
+        # derived from position, so a creature keeps its rhythm as it moves.
+        self.t_anim = 0
 
 
 class Obj(object):
@@ -1974,6 +1978,7 @@ class Game(object):
         self.l_last_dir = ' '
         self.max_hit = 0
         self.vf_hit = 0
+        self.anim_seq = 0
         self.pack_used = [False] * 26
         self.win = False
         self.death_reason = None
@@ -3025,6 +3030,8 @@ def new_monster(game, tp, type_ch, cp):
         tp.t_flags |= ISHASTE
     tp.t_turn = True
     tp.t_pack = []
+    game.anim_seq += 1
+    tp.t_anim = game.anim_seq & 1
     if game.is_wearing(R_AGGR):
         runto(game, cp)
     if type_ch == 'X':
@@ -7078,14 +7085,14 @@ kkkkkkkk
 """
 
 SPRITES['H'] = """
-kkkkkkkk
-kkcccckk
+kkkkkk33
+kkcccc3k
 kckccckc
 kcc00cck
 kkcccckk
 kk6666kk
-k666666k
-c666666c
+k6666668
+c666666k
 k666666k
 kk6kk6kk
 kk9kk9kk
@@ -7416,6 +7423,446 @@ def build_sprite_sheet(w, h):
 
 
 # ---------------------------------------------------------------------------
+# Second animation frame, monsters only.
+#
+# Two frames is all 8-bit hardware usually gave a character, and it is enough:
+# a wing beat, a tail flick, a jaw snap.  Each frame B below is a small edit of
+# its frame A -- the silhouette stays put so the creature still reads as the
+# same thing, and only the moving part moves.
+#
+# Anything without an entry here simply does not animate.
+# ---------------------------------------------------------------------------
+
+ANIM_MS = 320                   # ~3 frame changes a second
+
+SPRITES_B = {}
+
+SPRITES_B['A'] = """
+kkkkkkkk
+kkkkkkkk
+kiiiiikk
+iiiiiiik
+i0ii0iik
+iiiiiiik
+kiiiiiik
+kkiiiikk
+kkiikiik
+kkikkkik
+kkkkkkkk
+kkkkkkkk
+"""                                                 # tentacles sway
+
+SPRITES_B['B'] = """
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+k9kkkk9k
+k99kk99k
+k999999k
+kk9559kk
+kk9559kk
+kkk99kkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+"""                                                 # wings beat down
+
+SPRITES_B['C'] = """
+kkk77kkk
+kk7777kk
+kk7007kk
+kkk77kkk
+kaa77aak
+kk8888kk
+k888888k
+88888888
+88888888
+k8kk8k8k
+k8kk8k8k
+kk9k9k9k
+"""                                                 # draws the bow
+
+SPRITES_B['D'] = """
+kkkkkkkk
+kddkkkkk
+kdddkkkk
+dd5ddkkk
+ddddddkk
+kdddddjk
+kkddddjj
+kkddddkd
+kdddddkd
+kddkddkk
+kkdkkdkk
+kkkkkkkk
+"""                                                 # breathes a flame
+
+SPRITES_B['E'] = """
+kkkkkkkk
+kkkkkkkk
+kkkk88kk
+kkk8008k
+kkkj888k
+kkkk88kk
+kk8888kk
+k888888k
+k888888k
+kk8888kk
+kkk8k8kk
+kkj8kj8k
+"""                                                 # head bobs down
+
+SPRITES_B['F'] = """
+kkkkkkkk
+kkkkkkkk
+kkccccck
+kc2c2cck
+kcc2ccck
+kkccccck
+kkkdddkk
+kkkdddkk
+kkkdddkk
+kkdddddk
+kddddddk
+kkkkkkkk
+"""                                                 # jaws snap shut
+
+SPRITES_B['G'] = """
+kkkkkkkk
+kkkaakkk
+kka00akk
+kkjaaakk
+kaaaaaak
+ka8888ak
+aa8888aa
+k888888k
+k88kk88k
+k8kkkk8k
+k9kkkk9k
+kkkkkkkk
+"""                                                 # wings flap
+
+SPRITES_B['H'] = """
+kkkkkkkk
+kkcccckk
+kckccckc
+kcc00cck
+kkcccckk
+kk6666kk
+k666666k
+c6666668
+k666666k
+kk6kk633
+kk9kk933
+kkkkkkkk
+"""                                                 # swings its weapon
+
+SPRITES_B['I'] = """
+kkkkkkkk
+kk2222kk
+k222222k
+k2i22i2k
+k222222k
+k22ii22k
+k222222k
+ki2222ik
+k222222k
+kk2222kk
+kkikkikk
+kkkkkkkk
+"""                                                 # crystals shimmer
+
+SPRITES_B['J'] = """
+kkkkkkkk
+kkkkkkkk
+kgkkkkgk
+kggkkggk
+kgg55ggk
+kggggggk
+gg2gg2gg
+kggggggk
+kkgggggk
+kggkkggk
+kgkkkkgk
+k9kkkk9k
+"""                                                 # rears up
+
+SPRITES_B['K'] = """
+kkkkkkkk
+kkkjjkkk
+kkj00jkk
+kkajjakk
+kkkjjkkk
+8kkjjkk8
+88jjjj88
+k8jjjj8k
+kkjjjjkk
+kkkjjkkk
+kkakakkk
+kkkkkkkk
+"""                                                 # wings sweep down
+
+SPRITES_B['L'] = """
+kkddddkk
+kddddddk
+kk7777kk
+kk7007kk
+kkk77kkk
+kkddddkk
+kddddddk
+kaddddak
+kkddddkk
+kk9kk9kk
+kkkkkkkk
+kkkkkkkk
+"""                                                 # tosses its gold
+
+SPRITES_B['M'] = """
+kkkkkkkk
+kckckckk
+ckckkckc
+kkccccck
+kk7777kk
+kk5775kk
+kkk77kkk
+kkcccckk
+kcccccck
+kkccccck
+kkkcckkk
+kkkkkkkk
+"""                                                 # hair writhes
+
+SPRITES_B['N'] = """
+kkkkkkkk
+kahhhakk
+khhhhhak
+kk7777kk
+kk7007kk
+kkk77kkk
+7hhhhhh7
+khhhhhhk
+khhhhhhk
+kkhhhhkk
+k7kkkk7k
+kkkkkkkk
+"""                                                 # arms beckon
+
+SPRITES_B['O'] = """
+kkkkkkkk
+kkkkkkkk
+kkddddkk
+kddddddk
+kd5dd5dk
+kd2dd2dk
+kkddddkk
+8ddddddk
+kdddddd8
+kddddddk
+kkdkkdkk
+kk9kk9kk
+"""                                                 # shoulders roll
+
+SPRITES_B['P'] = """
+kkkkkkkk
+kkkkkkkk
+kkeeeekk
+keeeeeek
+ke0ee0ek
+keeeeeek
+keeeeeek
+keeeeeek
+keeeeeek
+kekeekek
+kkekkekk
+kkkkkkkk
+"""                                                 # bobs, hem wavers
+
+SPRITES_B['Q'] = """
+kkkkkkkk
+kkkkkk8k
+kkkkk808
+kkkkk888
+kk888888
+k2828288
+82828288
+k8888888
+k8kk8k8k
+k8kk8k8k
+kk9k9k9k
+kkkkkkkk
+"""                                                 # canters
+
+SPRITES_B['R'] = """
+kkkkkkkk
+kk8kkkkk
+k808kkkk
+k888kkkk
+kk8888kk
+kkkk888k
+kk88888k
+k888kk8k
+k88kkk8k
+k888888k
+kkkkbkkk
+kkkbbbkk
+"""                                                 # tail rattles
+
+SPRITES_B['S'] = """
+kkkkkkkk
+kkcccckk
+kcckkcck
+kckkkkck
+kcckkkkk
+kkcccckk
+kkkkkcck
+kkkkkkcc
+kccccccc
+cc0kkkkk
+kkkkkkkk
+kkkkkkkk
+"""                                                 # body undulates
+
+SPRITES_B['T'] = """
+kkkkkkkk
+kkddddkk
+kddddddk
+kd5dd5dk
+kdd22ddk
+kkddddkk
+kddddddd
+dddddddd
+kddddddk
+kddkkddk
+kd9kk9dk
+kkkkkkkk
+"""                                                 # clubs downward
+
+SPRITES_B['U'] = """
+kkkkkk2k
+kkkkk2kk
+kkkk2kkk
+kkk444kk
+kk45044k
+kk4444kk
+k444444k
+44444444
+44444444
+k4k4kk4k
+k4k4kk4k
+k1k1kk1k
+"""                                                 # gallops
+
+SPRITES_B['V'] = """
+kkkkkkkk
+kk1111kk
+k111111k
+k177771k
+k175571k
+kk7227kk
+61111116
+k611116k
+k611116k
+kk1111kk
+kk1kk1kk
+kkkkkkkk
+"""                                                 # cape flares
+
+SPRITES_B['W'] = """
+kkkkkkkk
+kkk44kkk
+kk4444kk
+k444444k
+k454454k
+k444444k
+k444444k
+kk4444kk
+k4k44k4k
+kk4kk4kk
+kkkkkkkk
+kkkkkkkk
+"""                                                 # drifts
+
+SPRITES_B['X'] = """
+kkkkkkkk
+kkkggkkk
+kkggggkk
+kggggggk
+gg2gg2gg
+kggggggk
+kggggggk
+kkggggkk
+kkgggkkk
+kkkgkkkk
+kkkkkkkk
+kkkkkkkk
+"""                                                 # shifts shape
+
+SPRITES_B['Y'] = """
+kkkkkkkk
+kk2222kk
+k222222k
+k2e22e2k
+k222222k
+kk2222kk
+22222222
+k222222k
+k222222k
+k22kk22k
+k2kkkk2k
+kkkkkkkk
+"""                                                 # raises its arms
+
+SPRITES_B['Z'] = """
+kkkkkkkk
+kkddddkk
+kddddddk
+kd0dd0dk
+kddddddk
+kkd11dkk
+kkddddkk
+dddddddk
+kdddddkd
+kddkkddk
+kkdkkdkk
+kkkkkkkk
+"""                                                 # lurches
+
+
+def validate_frame_b():
+    """Frame B obeys the same grid as frame A, or the art is wrong."""
+    bad = []
+    for key, art in SPRITES_B.items():
+        if key not in SPRITES:
+            bad.append("%r has a B frame but no A frame" % key)
+        rows = _rows(art)
+        if len(rows) != SPRITE_H:
+            bad.append("%r B has %d rows, want %d" % (key, len(rows), SPRITE_H))
+            continue
+        for n, row in enumerate(rows):
+            if len(row) != SPRITE_W:
+                bad.append("%r B row %d is %d wide, want %d"
+                           % (key, n, len(row), SPRITE_W))
+            for c in row:
+                if c not in PALETTE:
+                    bad.append("%r B row %d unknown colour %r" % (key, n, c))
+    if bad:
+        raise ValueError("frame B art errors:\n  " + "\n  ".join(bad))
+    return True
+
+
+def build_frame_b_sheet(w, h):
+    """Rasterise the second frame.  Anything without one reuses frame A, so
+    terrain and items stay perfectly still."""
+    lit = {}
+    dim = {}
+    for key in SPRITES:
+        art = SPRITES_B.get(key, SPRITES[key])
+        lit[key] = render_sprite(art, w, h, dim=False)
+        dim[key] = render_sprite(art, w, h, dim=True)
+    return lit, dim
+
+
+# ---------------------------------------------------------------------------
 # The graphical interface.  This is the one part that is NOT a port -- it
 # replaces curses entirely.  It is a pure function of the Screen buffer, the
 # message queue and the player's stats, so it holds no game state of its own.
@@ -7493,8 +7940,11 @@ class Renderer(object):
         # Sprite mode uses a 2:3 cell so the 8x12 art scales without distortion;
         # text mode keeps the taller cell a monospace glyph wants.
         self.sprite_mode = sprites
+        self.animate = True
         self.sprites = {}
         self.sprites_dim = {}
+        self.sprites_b = {}
+        self.sprites_b_dim = {}
 
         self.cell_w = cell_w
         self.cell_h = self._cell_height(cell_w)
@@ -7517,9 +7967,20 @@ class Renderer(object):
         if not self.sprite_mode:
             self.sprites = {}
             self.sprites_dim = {}
+            self.sprites_b = {}
+            self.sprites_b_dim = {}
             return
         self.sprites, self.sprites_dim = build_sprite_sheet(self.cell_w,
                                                             self.cell_h)
+        self.sprites_b, self.sprites_b_dim = build_frame_b_sheet(self.cell_w,
+                                                                 self.cell_h)
+
+    def _anim_frame(self):
+        """Which frame the clock is on right now.  Real time, not game time:
+        the dungeon keeps moving while the player thinks."""
+        if not self.animate:
+            return 0
+        return (pygame.time.get_ticks() // ANIM_MS) & 1
 
     def set_sprite_mode(self, on):
         """Switch between pixel art and the original glyph grid."""
@@ -7567,7 +8028,8 @@ class Renderer(object):
         is the obvious way to write this and is far too slow at 80x24x60fps.
 
         Control characters are replaced rather than passed through: pygame
-        raises on some of them (font.render("") is "Text has zero width"),
+        raises on some of them (font.render("
+") is "Text has zero width"),
         and a single bad character anywhere in a message would otherwise take
         down the whole frame.
         """
@@ -7622,6 +8084,8 @@ class Renderer(object):
                 for i, ch in enumerate(more):
                     self.blit_ch(ch, FG_MORE, 0, start + i, x_off, y_off)
 
+    _MONSTER_LETTERS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
     # characters that sit ON the floor rather than being terrain -- these get
     # a ground tile drawn underneath so entities aren't floating in the void
     ENTITY_CHARS = set(PLAYER + GOLD + POTION + SCROLL + FOOD + WEAPON
@@ -7638,6 +8102,7 @@ class Renderer(object):
         floor_dim = self.sprites_dim.get(FLOOR)
         pass_dim = self.sprites_dim.get(PASSAGE)
 
+        frame = self._anim_frame()
         for row in range(MAP_TOP, MAP_BOTTOM + 1):
             line = scr.ch[row]
             so_line = scr.so[row]
@@ -7660,7 +8125,20 @@ class Renderer(object):
                     if ground is not None:
                         surf.blit(ground, (x, y))
 
-                spr = sheet.get(ch)
+                spr = None
+                mon = game.moat(row, col)
+                if mon is not None and ch in self._MONSTER_LETTERS:
+                    # Animate only a monster that is actually awake.  This is
+                    # a deliberate change from the original, which gives the
+                    # player no way to tell a sleeping monster from an alert
+                    # one -- stillness here is real information.
+                    if on(mon, ISRUN) and self.animate:
+                        if (frame ^ mon.t_anim) & 1:
+                            sheet_b = (self.sprites_b if visible
+                                       else self.sprites_b_dim)
+                            spr = sheet_b.get(ch)
+                if spr is None:
+                    spr = sheet.get(ch)
                 if spr is None:
                     # no art for this character -- fall back to the glyph so
                     # nothing ever silently vanishes off the map
@@ -8459,11 +8937,14 @@ class GameLoop(object):
                ('j', 'jump', "jump (skip run animation)"),
                ('f', 'see_floor', "show the floor in dark rooms"),
                ('p', 'passgo', "follow corridors around corners"),
-               ('g', '@sprites', "graphics (off = original characters)"))
+               ('g', '@sprites', "graphics (off = original characters)"),
+               ('a', '@animate', "animate monsters"))
 
     def _option_value(self, attr):
         if attr == '@sprites':
             return self.renderer is not None and self.renderer.sprite_mode
+        if attr == '@animate':
+            return self.renderer is not None and self.renderer.animate
         return getattr(self.game, attr)
 
     def _option_lines(self):
@@ -8481,6 +8962,9 @@ class GameLoop(object):
             if attr == '@sprites':
                 if self.renderer is not None:
                     self.renderer.set_sprite_mode(not self.renderer.sprite_mode)
+            elif attr == '@animate':
+                if self.renderer is not None:
+                    self.renderer.animate = not self.renderer.animate
             else:
                 setattr(game, attr, not getattr(game, attr))
             break
@@ -8727,6 +9211,7 @@ def main(argv):
     args = parser.parse_args(argv)
 
     validate_sprites()      # fail loudly on bad art rather than blank tiles
+    validate_frame_b()
 
     try:
         if args.selftest is not None:
