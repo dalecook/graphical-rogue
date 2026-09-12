@@ -2206,13 +2206,16 @@ def endmsg(game):
     if len(game.msg_history) > MSG_HISTORY:
         del game.msg_history[0:len(game.msg_history) - MSG_HISTORY]
     game.msg_queue.append(text)
+    if len(game.msg_queue) > MSG_KEEP:
+        del game.msg_queue[:len(game.msg_queue) - MSG_KEEP]
 
 
 def msg(game, text=""):
     """io.c:31 -- post a message.  An empty message clears the line."""
     if text == "":
+        # msg("") means "clear the line" in the C, and still does here
         game.msg_current = ""
-        game.msg_queue.append("")
+        del game.msg_queue[:]
         return
     addmsg(game, text)
     endmsg(game)
@@ -2299,6 +2302,30 @@ def message_layout(queue, max_lines=MSG_LINES, width=NUMCOLS):
                 break
     flush()
     return out[:max_lines], consumed
+
+MSG_KEEP = 64                   # how much scrollback to retain for ^P
+
+
+def message_tail(queue, max_lines=MSG_LINES, width=NUMCOLS):
+    """The most RECENT messages that fit, oldest first.
+
+    The queue no longer blocks: rather than stopping the game until the
+    player dismisses a backlog, new messages simply push old ones off the
+    top, the way a log does.  Nothing is ever waiting to be acknowledged, so
+    a keypress is never spent on --More--.
+
+    The cost is that a message can scroll away unread in a very busy turn,
+    which is what the scrollback and ^P are for.
+    """
+    start = 0
+    while True:
+        lines, consumed = message_layout(queue[start:], max_lines, width)
+        if consumed >= len(queue) - start:
+            return lines
+        start += 1
+        if start >= len(queue):
+            return []
+
 
 def unctrl(ch):
     """curses unctrl(): a PRINTABLE form of a key.
@@ -8559,6 +8586,7 @@ BG = (13, 14, 18)
 BG_STATUS = (20, 22, 28)
 FG_DEFAULT = (198, 202, 210)
 FG_MSG = (236, 232, 208)
+FG_MSG_OLD = (150, 148, 134)     # earlier lines, dimmed so the newest reads
 FG_MORE = (255, 214, 110)
 FG_STATUS = (176, 184, 198)
 FG_LOWHP = (226, 94, 94)
@@ -8799,18 +8827,14 @@ class Renderer(object):
 
     def _draw_message(self, x_off, y_off):
         game = self.game
-        lines, consumed = message_layout(game.msg_queue, MSG_LINES, NUMCOLS)
-        for row, text in enumerate(lines[:MSG_LINES]):
+        lines = message_tail(game.msg_queue, MSG_LINES, NUMCOLS)
+        # oldest at the top, newest at the bottom, and the newest line is
+        # brighter so the eye lands on what just happened
+        first = max(0, MSG_LINES - len(lines))
+        for n, text in enumerate(lines[-MSG_LINES:]):
+            color = FG_MSG if n == len(lines) - 1 else FG_MSG_OLD
             for i, ch in enumerate(text[:NUMCOLS]):
-                self.blit_ch(ch, FG_MSG, row, i, x_off, y_off)
-        if len(game.msg_queue) > consumed:
-            # only when the backlog genuinely outruns the area
-            more = "--More--"
-            row = min(len(lines), MSG_LINES - 1)
-            tail = len(lines[row]) + 1 if row < len(lines) else 0
-            start = max(0, min(tail, NUMCOLS - len(more)))
-            for i, ch in enumerate(more):
-                self.blit_ch(ch, FG_MORE, row, start + i, x_off, y_off)
+                self.blit_ch(ch, color, first + n, i, x_off, y_off)
 
     _MONSTER_LETTERS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
@@ -9018,6 +9042,7 @@ HELP_LINES = [
     ">      go down a staircase    <      go up a staircase",
     "^      identify a trap        D      list discoveries",
     "Q      quit                   ESC    cancel a command",
+    "^P     show recent messages",
 ]
 
 
@@ -9124,13 +9149,8 @@ class GameLoop(object):
             self.renderer.clear_overlay()
             return False
 
-        # --More--: a keypress dismisses everything currently displayed,
-        # not just one message.  With a two-line area that is usually the
-        # whole backlog, so the prompt almost never appears.
-        shown = message_layout(game.msg_queue)[1]
-        if len(game.msg_queue) > shown:
-            del game.msg_queue[:max(1, shown)]
-            return False
+        # No --More--.  Messages roll off the top instead of blocking, so a
+        # keypress always does what the player pressed it for.
 
         if self.pending is not None:
             kind, cb = self.pending[0], self.pending[1]
@@ -9400,8 +9420,16 @@ class GameLoop(object):
             do_move(game, dy, dx)
             return
         if len(ch) == 1 and 1 <= ord(ch) <= 26:
-            # control-letter: run, but stop at doors.  command.c:203
             low = chr(ord(ch) - 1 + ord('a'))
+            if low == 'p':
+                # command.c:290 -- ^P repeats the last message.  Messages can
+                # now scroll off, so show the log rather than just the last.
+                game.after = False
+                if r is not None:
+                    hist = game.msg_history[-24:] or ["(nothing yet)"]
+                    r.show_overlay(hist, "Messages")
+                return
+            # control-letter: run, but stop at doors.  command.c:203
             if low in MOVE_KEYS:
                 if not on(game.player, ISBLIND):
                     game.door_stop = True
@@ -9850,9 +9878,7 @@ def selftest(turns, seed):
             deaths += 1
             game = new_game(None, headless=True)
             loop = GameLoop(game, None)
-        # drain any pending --More--
-        while len(game.msg_queue) > 1:
-            game.msg_queue.pop(0)
+        # nothing to drain: messages roll off rather than blocking
         if loop.pending is not None:
             kind = loop.pending[0]
             if kind == 'item':
