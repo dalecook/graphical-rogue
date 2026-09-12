@@ -2208,6 +2208,25 @@ def msg(game, text=""):
     endmsg(game)
 
 
+def unctrl(ch):
+    """curses unctrl(): a PRINTABLE form of a key.
+
+    The C calls this everywhere it echoes a keystroke back at the player
+    (command.c:468 illcom, and the help and identify messages).  Without it a
+    control character ends up inside a message string, and pygame refuses to
+    render one -- font.render("") raises "Text has zero width" -- which
+    takes the whole game down when that message reaches the top of the queue.
+    """
+    if not ch:
+        return ""
+    c = ord(ch[0])
+    if c < 32:
+        return "^" + chr(c + 64)
+    if c == 127:
+        return "^?"
+    return ch[0]
+
+
 def prname(mname, upper):
     """fight.c:520 -- the print name of a combatant."""
     tbuf = "you" if mname is None else mname
@@ -7545,7 +7564,15 @@ class Renderer(object):
 
     def glyph(self, ch, color):
         """Render-and-cache one character.  Rendering every glyph every frame
-        is the obvious way to write this and is far too slow at 80x24x60fps."""
+        is the obvious way to write this and is far too slow at 80x24x60fps.
+
+        Control characters are replaced rather than passed through: pygame
+        raises on some of them (font.render("") is "Text has zero width"),
+        and a single bad character anywhere in a message would otherwise take
+        down the whole frame.
+        """
+        if ch and (ord(ch) < 32 or ord(ch) == 127):
+            ch = "?"
         key = (ch, color)
         surf = self.glyph_cache.get(key)
         if surf is None:
@@ -7916,7 +7943,7 @@ class GameLoop(object):
                         obj = o
                         break
                 if obj is None:
-                    msg(game, "'%s' is not a valid item" % ch)
+                    msg(game, "'%s' is not a valid item" % unctrl(ch))
                     return False
                 self.pending = None
                 return self.finish(cb, obj)
@@ -8308,7 +8335,7 @@ class GameLoop(object):
             # command.c:illcom
             game.after = False
             game.count = 0
-            msg(game, "illegal command '%s'" % ch)
+            msg(game, "illegal command '%s'" % unctrl(ch))
 
     # -- command continuations --------------------------------------------
 
@@ -8409,7 +8436,7 @@ class GameLoop(object):
             MAGIC: "magic", VWALL: "wall of a room", HWALL: "wall of a room",
             ' ': "solid rock",
         }
-        msg(game, "'%s': %s" % (ch, names.get(ch, "unknown character")))
+        msg(game, "'%s': %s" % (unctrl(ch), names.get(ch, "unknown character")))
 
     def _picky_inven(self, ch):
         game = self.game
@@ -8417,7 +8444,7 @@ class GameLoop(object):
             if obj.o_packch == ch:
                 msg(game, "%c) %s" % (ch, inv_name(game, obj, False)))
                 return
-        msg(game, "'%s' not in pack" % ch)
+        msg(game, "'%s' not in pack" % unctrl(ch))
 
     def _status_msg(self):
         game = self.game
