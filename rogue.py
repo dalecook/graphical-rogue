@@ -7453,12 +7453,19 @@ class GameLoop(object):
     # -- command continuations --------------------------------------------
 
     def _put_on_ring(self, obj):
+        """rings.c:41 -- the C asks which hand ONLY when both are free."""
         game = self.game
-        if (game.cur_ring[LEFT] is None and game.cur_ring[RIGHT] is None
-                and obj is not None and obj.o_type == RING):
-            ring_on(game, obj, LEFT)
-        else:
-            ring_on(game, obj, None)
+        if obj is None:
+            return
+        if obj.o_type != RING:
+            ring_on(game, obj, None)        # it prints the right complaint
+            return
+        if is_current(game, obj):
+            return
+        if game.cur_ring[LEFT] is None and game.cur_ring[RIGHT] is None:
+            self.ask_hand(lambda hand: ring_on(game, obj, hand))
+            return
+        ring_on(game, obj, None)            # exactly one hand free, or neither
 
     def _zap_dir(self, _delta):
         self.ask_item("zap with", STICK, lambda o: do_zap(self.game, o))
