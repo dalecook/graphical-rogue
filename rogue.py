@@ -1994,6 +1994,7 @@ class Game(object):
         self.jump = False
         self.see_floor = True
         self.passgo = False
+        self.autowalk = True
         self.tombstone = True
         self.whoami = os.environ.get("USERNAME") or os.environ.get("USER") or "Rodney"
 
@@ -9043,6 +9044,7 @@ HELP_LINES = [
     "^      identify a trap        D      list discoveries",
     "Q      quit                   ESC    cancel a command",
     "^P     show recent messages",
+    "hold a direction to keep walking; it stops for anything worth a look",
 ]
 
 
@@ -9700,7 +9702,8 @@ class GameLoop(object):
                ('f', 'see_floor', "show the floor in dark rooms"),
                ('p', 'passgo', "follow corridors around corners"),
                ('g', '@sprites', "graphics (off = original characters)"),
-               ('a', '@animate', "animate monsters"))
+               ('a', '@animate', "animate monsters"),
+               ('w', 'autowalk', "hold a direction to walk"))
 
     def _option_value(self, attr):
         if attr == '@sprites':
@@ -9791,6 +9794,74 @@ def new_game(seed=None, headless=False):
     fuse(game, swander, 0, spread(70), AFTER)           # WANDERTIME
     start_daemon(game, stomach, 0, AFTER)
     return game
+
+
+# ---------------------------------------------------------------------------
+# Hold-to-walk
+#
+# Holding a direction should walk, but it must never charge the hero through
+# the dungeon.  Three rules make that safe:
+#
+#   1. Poll the held key each frame instead of using pygame.key.set_repeat.
+#      OS repeat queues events, so the hero keeps going after the key is
+#      released and overshoots; polling stops on the same frame.
+#   2. Wait AUTOWALK_DELAY_MS before repeating, so a tap is exactly one step.
+#   3. Halt on anything worth a decision -- and require the key to be released
+#      and pressed again to resume.  A halt that resumed by itself would let
+#      the player hold straight through a fight, which is the whole problem.
+# ---------------------------------------------------------------------------
+
+AUTOWALK_DELAY_MS = 250         # hold this long before walking begins
+AUTOWALK_MS = 130               # then one step this often (~7.7 a second)
+
+# Standing on any of these is a decision point, so walking stops.
+AUTOWALK_STOP_TILES = (STAIRS, TRAP, DOOR, GOLD, POTION, SCROLL, FOOD,
+                       WEAPON, ARMOR, RING, STICK, AMULET, MAGIC)
+
+# A visible monster stops the walk when it comes INTO view, or when it is
+# within this distance (squared, as dist() returns d^2).
+#
+# The first rule tried was "stop for any awake visible monster", which is
+# useless: entering a lit room runs door_open -> wake_monster over every
+# ISMEAN monster in it, so half the level is awake the moment you can see it
+# and a hold never lasted more than one step.  What the player actually wants
+# to be interrupted by is something NEW appearing, or something getting close.
+AUTOWALK_MONST_DIST = 25        # 5 tiles
+
+
+def visible_monsters(game):
+    """Identity of every monster the hero can currently see."""
+    return frozenset(id(mp) for mp in game.mlist if see_monst(game, mp))
+
+
+def walk_snapshot(game):
+    """State to compare against after a step."""
+    return (game.pstats.s_hpt, game.proom, game.hero_steps,
+            visible_monsters(game))
+
+
+def auto_walk_stop(game, snap):
+    """Why hold-to-walk should stop, or None to keep going."""
+    hp, room, steps, seen = snap
+    if not game.playing:
+        return "the game ended"
+    if game.no_command or game.no_move:
+        return "you cannot move"
+    if game.pstats.s_hpt < hp:
+        return "you were hurt"
+    if game.hero_steps == steps:
+        return "you did not move"           # wall, or the move was refused
+    if game.proom is not room:
+        return "you entered somewhere new"
+    if game.chat(game.hero.y, game.hero.x) in AUTOWALK_STOP_TILES:
+        return "there is something here"
+    now_seen = visible_monsters(game)
+    if now_seen - seen:
+        return "something came into view"
+    for mp in game.mlist:
+        if see_monst(game, mp) and dist_cp(mp.t_pos, game.hero) <= AUTOWALK_MONST_DIST:
+            return "a monster is close"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -9929,20 +10000,59 @@ def play(seed, sprites=True):
     clock = pygame.time.Clock()
     ended_shown = False
     running = True
+
+    held_key = None             # the pygame key currently held for walking
+    held_ch = None              # the direction it maps to
+    held_since = 0
+    last_step = 0
+    halted = None               # why walking stopped; cleared on key release
+
+    def step(ch):
+        """Take one step and decide whether walking may continue."""
+        snap = walk_snapshot(game)
+        loop.feed(ch)
+        if loop.pending is not None or renderer.overlay is not None:
+            return "a prompt is open"
+        return auto_walk_stop(game, snap)
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.VIDEORESIZE:
                 renderer.resize(event.w, event.h)
+            elif event.type == pygame.KEYUP:
+                if held_key is not None and event.key == held_key:
+                    held_key = held_ch = None
+                    halted = None       # releasing re-arms walking
             elif event.type == pygame.KEYDOWN:
                 if not game.playing:
                     if ended_shown:
                         running = False
                     continue
                 ch = event_to_char(event)
-                if ch is not None:
+                if ch is None:
+                    continue
+                if game.autowalk and ch in MOVE_KEYS and loop.pending is None:
+                    now = pygame.time.get_ticks()
+                    halted = step(ch)
+                    held_key, held_ch = event.key, ch
+                    held_since = last_step = now
+                else:
                     loop.feed(ch)
+
+        # Hold-to-walk.  Polled, not key-repeat, so releasing stops at once.
+        if (held_ch is not None and halted is None and game.playing
+                and loop.pending is None and renderer.overlay is None):
+            now = pygame.time.get_ticks()
+            if (now - held_since >= AUTOWALK_DELAY_MS
+                    and now - last_step >= AUTOWALK_MS):
+                halted = step(held_ch)
+                last_step = now
+        # if focus was lost the KEYUP may never arrive; trust the keyboard
+        if held_key is not None and not pygame.key.get_pressed()[held_key]:
+            held_key = held_ch = None
+            halted = None
 
         if game.playing and loop.pending is None and game.running:
             loop.auto_step()
