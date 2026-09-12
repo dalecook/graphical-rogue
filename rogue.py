@@ -34,17 +34,17 @@ are met:
    may be used to endorse or promote products derived from this software
    without specific prior written permission.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
+ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR(S) OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
 ----------------------------------------------------------------------------
 """
 
@@ -7209,15 +7209,24 @@ def new_game(seed=None, headless=False):
 ARROW_KEYS = {}
 
 
+def _keypad(n):
+    """pygame 2 renamed K_KP1 to K_KP_1 and kept the old name as an alias.
+    Accept whichever this pygame provides so keypad movement can't break
+    startup on a build that has dropped the alias."""
+    return getattr(pygame, "K_KP_%d" % n, None) or getattr(pygame, "K_KP%d" % n, None)
+
+
 def _init_arrow_keys():
     ARROW_KEYS.update({
         pygame.K_LEFT: 'h', pygame.K_DOWN: 'j', pygame.K_UP: 'k',
         pygame.K_RIGHT: 'l',
-        pygame.K_KP1: 'b', pygame.K_KP2: 'j', pygame.K_KP3: 'n',
-        pygame.K_KP4: 'h', pygame.K_KP5: '.', pygame.K_KP6: 'l',
-        pygame.K_KP7: 'y', pygame.K_KP8: 'k', pygame.K_KP9: 'u',
         pygame.K_ESCAPE: chr(ESCAPE),
     })
+    for n, ch in ((1, 'b'), (2, 'j'), (3, 'n'), (4, 'h'), (5, '.'),
+                  (6, 'l'), (7, 'y'), (8, 'k'), (9, 'u')):
+        key = _keypad(n)
+        if key is not None:
+            ARROW_KEYS[key] = ch
 
 
 def event_to_char(event):
