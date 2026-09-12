@@ -1612,7 +1612,10 @@ def rnd(range_):
     """
     if range_ == 0:
         return 0
-    return _rng.randrange(abs(range_)) if range_ > 0 else 0
+    # A negative range still draws in the C -- abs(RN) % range consumes a
+    # random number either way -- so it must draw here too, or a seeded
+    # replay desynchronises wherever the game passes a negative (conn() can).
+    return _rng.randrange(abs(range_))
 
 
 def roll(number, sides):
@@ -1649,11 +1652,31 @@ def parse_dice(s):
         if sep is None:
             continue
         a, _, b = part.partition(sep)
-        try:
-            out.append((int(a), int(b)))
-        except ValueError:
-            continue
+        # C atoi() semantics: a field that isn't a number is 0, not an error.
+        # This matters -- the venus flytrap's table entry is literally
+        # "%%%x0" (extern.c:199), and fight.c relies on atoi("%%%") == 0
+        # while STILL running the attack loop, so swing() is rolled and a hit
+        # deals 0 damage but sets ISHELD.  Skipping the pair instead would
+        # make the flytrap unable to hit or hold the player at all.
+        out.append((_atoi(a), _atoi(b)))
     return out
+
+
+def _atoi(s):
+    """C atoi(): leading integer, or 0 if there isn't one."""
+    s = s.strip()
+    i = 0
+    if i < len(s) and s[i] in '+-':
+        i += 1
+    j = i
+    while j < len(s) and s[j].isdigit():
+        j += 1
+    if j == i:
+        return 0
+    try:
+        return int(s[:j])
+    except ValueError:
+        return 0
 
 
 def roll_dice_string(s):
@@ -1923,6 +1946,13 @@ class Game(object):
         self.count = 0
         self.quiet = 0
         self.group = 2
+        # extern.c:18  `after`   -- true if we want the after-daemons to run;
+        #                           reset at the top of every command
+        # extern.c:397 `between` -- a PERSISTENT counter used only by rollwand()
+        # These are two different globals in the C and must not be conflated:
+        # sharing one field means every command resets the wandering-monster
+        # counter, and no wanderer ever spawns.
+        self.after = True
         self.between = 0
         self.amulet = False
         self.playing = True
@@ -2660,7 +2690,10 @@ def conn(game, r1, r2):
         turn_delta.x = 0
         turn_distance = abs(spos.y - epos.y)
 
-    turn_spot = rnd(distance - 1) + 1 if distance > 1 else 1
+    # passages.c:221 -- unconditional; rnd() now draws for negative ranges
+    # too, so this stays in step with the C.  turn_spot is unused when
+    # distance <= 0 because the digging loop does not run.
+    turn_spot = rnd(distance - 1) + 1
 
     # Draw the doors on either side, or just #'s if the rooms are gone.
     if not (rpf.r_flags & ISGONE):
@@ -3371,7 +3404,15 @@ def cansee(game, y, x):
 
 
 def find_dest(game, tp):
-    """chase.c:471 -- find the proper destination for the monster."""
+    """chase.c:471 -- find the proper destination for the monster.
+
+    PORT NOTE: the C reuses its own parameter `tp` as the mlist walker in the
+    inner loop.  When an object is already claimed, the outer loop therefore
+    continues with `tp` pointing at the CLAIMING monster, so every later
+    `tp->t_room` test compares against the wrong room.  That is a real bug in
+    5.4.5, but it changes both which object a treasure-seeker picks and how
+    many rnd(100) draws are consumed, so it is reproduced rather than fixed.
+    """
     prob = monster_info(tp.t_type)['carry']
     if prob <= 0 or tp.t_room is game.proom or see_monst(game, tp):
         return game.hero
@@ -3379,13 +3420,14 @@ def find_dest(game, tp):
         if obj.o_type == SCROLL and obj.o_which == S_SCARE:
             continue
         if roomin(game, obj.o_pos) is tp.t_room and rnd(100) < prob:
-            taken = False
+            claimer = None
             for other in game.mlist:
                 if other.t_dest is obj.o_pos:
-                    taken = True
+                    claimer = other
                     break
-            if not taken:
+            if claimer is None:
                 return obj.o_pos
+            tp = claimer                # the C's parameter clobber
     return game.hero
 
 
@@ -3931,7 +3973,7 @@ def look(game, wakeup):
 
 def trip_ch(game, y, x, ch):
     """misc.c:186 -- the character for this space, accounting for tripping."""
-    if on(game.player, ISHALU) and game.between:
+    if on(game.player, ISHALU) and game.after:
         if ch in (FLOOR, ' ', PASSAGE, HWALL, VWALL, DOOR, TRAP):
             return ch
         if y != game.stairs.y or x != game.stairs.x or not game.seenstairs:
@@ -4394,7 +4436,8 @@ def is_magic(obj):
     """weapons.c -- is this object magic (and so worth a nymph stealing)?"""
     t = obj.o_type
     if t == ARMOR:
-        return obj.o_arm != ARMORS[obj.o_which]['ac']
+        # potions.c:237 -- protected armor counts as magic even unenchanted
+        return bool(obj.o_flags & ISPROT) or obj.o_arm != ARMORS[obj.o_which]["ac"]
     if t == WEAPON:
         return obj.o_hplus != 0 or obj.o_dplus != 0
     return t in (POTION, SCROLL, STICK, RING, AMULET)
@@ -4525,7 +4568,7 @@ def drop(game, obj):
     """things.c:137 -- put something down."""
     ch = game.chat(game.hero.y, game.hero.x)
     if ch != FLOOR and ch != PASSAGE:
-        game.between = False
+        game.after = False
         msg(game, "there is something there already")
         return
     if obj is None:
@@ -5001,7 +5044,7 @@ def quaff(game, obj):
         msg(game, "you begin to feel much better")
     elif w == P_HASTE:
         game.pot_info[P_HASTE].oi_know = True
-        game.between = False
+        game.after = False
         if add_haste(game, True):
             msg(game, "you feel yourself moving much faster")
     elif w == P_RESTORE:
@@ -5372,7 +5415,7 @@ def wear(game, obj):
         if not game.terse:
             addmsg(game, ".  You'll have to take it off first")
         endmsg(game)
-        game.between = False
+        game.after = False
         return
     if obj.o_type != ARMOR:
         msg(game, "you can't wear that")
@@ -5390,7 +5433,7 @@ def take_off(game):
     """armor.c:51"""
     obj = game.cur_armor
     if obj is None:
-        game.between = False
+        game.after = False
         msg(game, "not wearing armor" if game.terse
             else "you aren't wearing any armor")
         return
@@ -5410,7 +5453,7 @@ def waste_time(game):
 
 
 def rust_armor(game, arm):
-    """weapons.c -- an aquator corrodes armor."""
+    """move.c:410 -- an aquator corrodes armor."""
     if (arm is None or arm.o_type != ARMOR or arm.o_which == LEATHER
             or arm.o_arm >= 9):
         return
@@ -5420,9 +5463,9 @@ def rust_armor(game, arm):
         return
     arm.o_arm += 1
     if not game.terse:
-        msg(game, "your armor weakens")
-    else:
         msg(game, "your armor appears to be weaker now. Oh my!")
+    else:
+        msg(game, "your armor weakens")
 
 
 # ---------------------------------------------------------------------------
@@ -5497,14 +5540,14 @@ def wield(game, obj):
         return
     game.cur_weapon = oweapon
     if obj is None:
-        game.between = False
+        game.after = False
         return
     if obj.o_type == ARMOR:
         msg(game, "you can't wield armor")
-        game.between = False
+        game.after = False
         return
     if is_current(game, obj):
-        game.between = False
+        game.after = False
         return
     sp = inv_name(game, obj, True)
     game.cur_weapon = obj
@@ -5522,7 +5565,7 @@ def do_zap(game, obj):
     if obj is None:
         return
     if obj.o_type != STICK:
-        game.between = False
+        game.after = False
         msg(game, "you can't zap with that!")
         return
     if obj.o_charges == 0:
@@ -5786,10 +5829,15 @@ def fire_bolt(game, start, direction, name):
 # Hero movement.  Ported from move.c
 # ---------------------------------------------------------------------------
 
+def _rncolor():
+    """move.c: rainbow[rnd(cNCOLORS)]"""
+    return RAINBOW[rnd(len(RAINBOW))]
+
+
 def do_run(game, ch):
     """move.c:27 -- start the hero running."""
     game.running = True
-    game.between = False
+    game.after = False
     game.runch = ch
 
 
@@ -5815,16 +5863,24 @@ def do_move(game, dy, dx):
         # hold a live reference to it as their chase destination
         game.hero.set(nh)
 
+    # move.c:70 -- the `over:` label sits INSIDE the else branch, so a retry
+    # from the passgo corner-turn recomputes hero+delta without re-rolling the
+    # confusion check.  Rolling it per iteration would draw an extra rnd(5)
+    # per corner and could turn a corridor turn into a random stumble.
+    confused = on(game.player, ISHUH) and rnd(5) != 0
+    first = True
+
     while True:                                         # the `over` label
-        if on(game.player, ISHUH) and rnd(5) != 0:
+        if first and confused:
             nh = rndmove(game, game.player)
             if nh == game.hero:
-                game.between = False
+                game.after = False
                 game.running = False
                 game.to_death = False
                 return
         else:
             nh = Coord(game.hero.x + dx, game.hero.y + dy)
+        first = False
 
         hit_bound = (nh.x < 0 or nh.x >= NUMCOLS
                      or nh.y <= 0 or nh.y >= NUMLINES - 1)
@@ -5832,11 +5888,11 @@ def do_move(game, dy, dx):
         ch = ' '
         if not hit_bound:
             if not diag_ok(game, game.hero, nh):
-                game.between = False
+                game.after = False
                 game.running = False
                 return
             if game.running and game.hero == nh:
-                game.between = False
+                game.after = False
                 game.running = False
             fl = game.flat(nh.y, nh.x)
             ch = game.winat(nh.y, nh.x)
@@ -5888,7 +5944,7 @@ def do_move(game, dy, dx):
                 if turned:
                     continue                            # goto over
             game.running = False
-            game.between = False
+            game.after = False
             return
 
         if ch == DOOR:
@@ -5975,21 +6031,32 @@ def be_trapped(game, tc):
         game.no_move += spread(3)                       # BEARTIME
         msg(game, "you are caught in a bear trap")
     elif tr == T_MYST:
+        # move.c:286 -- a switch, so only the CHOSEN case evaluates its
+        # rnd(NCOLORS).  Building a tuple of all eleven strings first would
+        # draw four extra random numbers every time and show the wrong colour.
         which = rnd(11)
-        mystic = (
-            "you are suddenly in a parallel dimension",
-            "the light in here suddenly seems %s" % RAINBOW[rnd(len(RAINBOW))],
-            "you feel a sting in the side of your neck",
-            "multi-colored lines swirl around you, then fade",
-            "a %s light flashes in your eyes" % RAINBOW[rnd(len(RAINBOW))],
-            "a spike shoots past your ear!",
-            "%s sparks dance across your armor" % RAINBOW[rnd(len(RAINBOW))],
-            "you suddenly feel very thirsty",
-            "you feel time speed up suddenly",
-            "time now seems to be going slower",
-            "you pack turns %s!" % RAINBOW[rnd(len(RAINBOW))],
-        )
-        msg(game, mystic[which])
+        if which == 0:
+            msg(game, "you are suddenly in a parallel dimension")
+        elif which == 1:
+            msg(game, "the light in here suddenly seems %s" % _rncolor())
+        elif which == 2:
+            msg(game, "you feel a sting in the side of your neck")
+        elif which == 3:
+            msg(game, "multi-colored lines swirl around you, then fade")
+        elif which == 4:
+            msg(game, "a %s light flashes in your eyes" % _rncolor())
+        elif which == 5:
+            msg(game, "a spike shoots past your ear!")
+        elif which == 6:
+            msg(game, "%s sparks dance across your armor" % _rncolor())
+        elif which == 7:
+            msg(game, "you suddenly feel very thirsty")
+        elif which == 8:
+            msg(game, "you feel time speed up suddenly")
+        elif which == 9:
+            msg(game, "time now seems to be going slower")
+        elif which == 10:
+            msg(game, "you pack turns %s!" % _rncolor())
     elif tr == T_SLEEP:
         game.no_command += spread(5)                    # SLEEPTIME
         game.player.t_flags &= ~ISRUN
@@ -6033,7 +6100,11 @@ def be_trapped(game, tc):
 
 def rndmove(game, who):
     """move.c:352 -- move in a random direction if confused."""
-    ret = Coord(who.t_pos.x + rnd(3) - 1, who.t_pos.y + rnd(3) - 1)
+    # move.c:368 draws Y first, then X.  Coord(x, y) would reverse that,
+    # because Python evaluates arguments left to right.
+    _ry = who.t_pos.y + rnd(3) - 1
+    _rx = who.t_pos.x + rnd(3) - 1
+    ret = Coord(_rx, _ry)
     y, x = ret.y, ret.x
     if y == who.t_pos.y and x == who.t_pos.x:
         return ret
@@ -6080,9 +6151,19 @@ def teleport(game):
 
 
 def search(game):
-    """command.c -- search for secret doors and passages."""
-    for y in range(game.hero.y - 1, game.hero.y + 2):
-        for x in range(game.hero.x - 1, game.hero.x + 2):
+    """command.c:477 -- player gropes about him to find hidden things.
+
+    Each hidden thing has its own discovery odds, and hallucination and
+    blindness both make searching harder via probinc.
+    """
+    ey = game.hero.y + 1
+    ex = game.hero.x + 1
+    probinc = (3 if on(game.player, ISHALU) else 0)
+    probinc += (2 if on(game.player, ISBLIND) else 0)
+    found = False
+
+    for y in range(game.hero.y - 1, ey + 1):
+        for x in range(game.hero.x - 1, ex + 1):
             if y == game.hero.y and x == game.hero.x:
                 continue
             if not game.in_bounds(y, x):
@@ -6090,30 +6171,45 @@ def search(game):
             fp = game.flat(y, x)
             if fp & F_REAL:
                 continue
-            prob = 5
-            if game.is_wearing(R_SEARCH):
-                prob = 3
-            elif on(game.player, ISHALU):
-                prob = 6
-            if rnd(prob) != 0:
-                continue
+
             ch = game.chat(y, x)
+            hit = False
             if ch in (VWALL, HWALL):
+                if rnd(5 + probinc) != 0:
+                    continue
                 game.set_chat(y, x, DOOR)
                 msg(game, "a secret door")
+                hit = True
             elif ch == FLOOR:
+                if rnd(2 + probinc) != 0:
+                    continue
                 game.set_chat(y, x, TRAP)
-                game.set_flat(y, x, fp | F_REAL)
+                if not game.terse:
+                    addmsg(game, "you found ")
                 if on(game.player, ISHALU):
-                    msg(game, "a trap!!!")
+                    # a RANDOM trap name while tripping, and no F_SEEN
+                    msg(game, TRAP_NAMES[rnd(NTRAPS)])
                 else:
-                    msg(game, "you found %s" % TRAP_NAMES[fp & F_TMASK])
-            else:
-                game.set_flat(y, x, fp | F_REAL)
-                continue
-            game.set_flat(y, x, game.flat(y, x) | F_REAL)
-            game.count = 0
-            game.running = False
+                    msg(game, TRAP_NAMES[fp & F_TMASK])
+                    game.set_flat(y, x, game.flat(y, x) | F_SEEN)
+                hit = True
+            elif ch == ' ':
+                if rnd(3 + probinc) != 0:
+                    continue
+                # the C sets the character here; without it a found secret
+                # passage stays ' ', step_ok(' ') is False, and it is
+                # permanently invisible and unwalkable
+                game.set_chat(y, x, PASSAGE)
+                hit = True
+
+            if hit:                                     # the C's `foundone:`
+                found = True
+                game.set_flat(y, x, game.flat(y, x) | F_REAL)
+                game.count = 0
+                game.running = False
+
+    if found:
+        look(game, False)
 
 
 def d_level(game):
@@ -6405,7 +6501,7 @@ def come_down(game, arg=0):
 
 def visuals(game, arg=0):
     """daemons.c:236 -- change the characters for a hallucinating player."""
-    if not game.between or (game.running and game.jump):
+    if not game.after or (game.running and game.jump):
         return
     scr = game.screen
     for tp in game.lvl_obj:
@@ -6824,6 +6920,7 @@ class GameLoop(object):
         # get_dir() and gethand(); a pygame loop cannot block, so a command
         # that needs a follow-up key parks a continuation here instead.
         self.pending = None         # (kind, callback, extra)
+        self.moves_left = 0         # remaining iterations of command()'s ntimes loop
         self.count = 0
         self.countch = None
         self.last_dir = None
@@ -6848,7 +6945,7 @@ class GameLoop(object):
             kind, cb = self.pending[0], self.pending[1]
             if ch == chr(ESCAPE):
                 self.pending = None
-                game.between = False
+                game.after = False
                 msg(game, "")
                 return False
             if kind == 'item':
@@ -6921,78 +7018,91 @@ class GameLoop(object):
     def finish(self, cb, value):
         """Run a parked continuation, then close out the turn it belongs to."""
         game = self.game
-        game.between = True
+        game.after = True
         cb(value)
         return self.end_turn()
 
     # -- the turn ----------------------------------------------------------
 
-    def pre_turn(self):
-        game = self.game
-        do_daemons(game, BEFORE)
-        do_fuses(game, BEFORE)
+    def end_command(self):
+        """command.c:447 -- the tail of command(), run ONCE per command call.
 
-    def end_turn(self):
+        The after-daemons are outside the ntimes loop in the C, so a hasted
+        player gets two actions against one round of monster movement -- that
+        is what haste actually buys.  The ring effects below were missing
+        entirely: the ring of searching auto-searches every turn, and the ring
+        of teleportation is what makes that ring cursed.
+        """
         game = self.game
-        if game.take:
-            pick_up(game, game.take)
-            game.take = 0
-        if game.between:
-            do_daemons(game, AFTER)
-            do_fuses(game, AFTER)
+        do_daemons(game, AFTER)
+        do_fuses(game, AFTER)
+        if game.is_ring(LEFT, R_SEARCH):
+            search(game)
+        elif game.is_ring(LEFT, R_TELEPORT) and rnd(50) == 0:
+            teleport(game)
+        if game.is_ring(RIGHT, R_SEARCH):
+            search(game)
+        elif game.is_ring(RIGHT, R_TELEPORT) and rnd(50) == 0:
+            teleport(game)
         if game.pstats.s_hpt <= 0 and game.playing:
             death(game, 'h')
         game.turns += 1
         if game.playing:
             look(game, True)
-            if not game.running:
-                game.door_stop = False
+
+    def end_turn(self):
+        """Close out a command that had parked on a follow-up keypress."""
+        game = self.game
+        if game.take:
+            pick_up(game, game.take)
+            game.take = 0
+        if not game.running:
+            game.door_stop = False
+        if not game.after:
+            self.moves_left += 1        # command.c:444  if (!after) ntimes++
+        self.moves_left -= 1
+        if self.moves_left <= 0:
+            self.end_command()
         return True
 
     def turn(self, ch):
-        """command.c:24 -- process one user command."""
+        """command.c:24 -- process one user command.
+
+        One keypress is one iteration of the C's `while (ntimes--)` loop.  The
+        before-daemons fire when a fresh command() call begins; the after
+        half fires when the last iteration is spent.
+        """
         game = self.game
-        self.pre_turn()
 
-        ntimes = 2 if on(game.player, ISHASTE) else 1
-        consumed = False
-        for _ in range(ntimes):
-            if not game.playing:
-                break
-            if game.has_hit:
-                endmsg(game)
-                game.has_hit = False
-            look(game, True)
-            if not game.running:
-                game.door_stop = False
-            game.take = 0
-            game.between = True
+        if self.moves_left <= 0:
+            do_daemons(game, BEFORE)
+            do_fuses(game, BEFORE)
+            self.moves_left = 2 if on(game.player, ISHASTE) else 1
 
-            if game.no_command:
-                game.no_command -= 1
-                if game.no_command == 0:
-                    game.player.t_flags |= ISRUN
-                    msg(game, "you can move again")
-                c = '.'
-            else:
-                c = ch
-            self.dispatch(c)
-            if self.pending is not None:
-                return False            # waiting on a follow-up key
-            consumed = True
-            if game.take:
-                pick_up(game, game.take)
-                game.take = 0
-            if game.between:
-                do_daemons(game, AFTER)
-                do_fuses(game, AFTER)
-            if game.pstats.s_hpt <= 0 and game.playing:
-                death(game, 'h')
+        if not game.playing:
+            return False
+        if game.has_hit:
+            endmsg(game)
+            game.has_hit = False
+        look(game, True)
+        if not game.running:
+            game.door_stop = False
+        game.take = 0
+        game.after = True
 
-        game.turns += 1
-        if game.playing:
-            look(game, True)
-        return consumed
+        if game.no_command:
+            game.no_command -= 1
+            if game.no_command == 0:
+                game.player.t_flags |= ISRUN
+                msg(game, "you can move again")
+            c = '.'
+        else:
+            c = ch
+        self.dispatch(c)
+        if self.pending is not None:
+            return False                # waiting on a follow-up key
+
+        return self.end_turn()
 
     def dispatch(self, ch):
         """command.c:153 -- the command switch."""
@@ -7054,23 +7164,23 @@ class GameLoop(object):
         elif ch == 's':
             search(game)
         elif ch == '>':
-            game.between = False
+            game.after = False
             d_level(game)
         elif ch == '<':
-            game.between = False
+            game.after = False
             u_level(game)
         elif ch == 'i':
-            game.between = False
+            game.after = False
             lines = inventory(game, game.pack, 0)
             if lines and r is not None:
                 r.show_overlay(lines, "Inventory")
         elif ch == 'I':
-            game.between = False
+            game.after = False
             lines = inventory(game, game.pack, 0)
             if lines and r is not None:
                 r.show_overlay(lines, "Inventory")
         elif ch == 'D':
-            game.between = False
+            game.after = False
             lines = []
             for t in (POTION, SCROLL, RING, STICK):
                 lines.extend(print_disc(game, t))
@@ -7078,33 +7188,33 @@ class GameLoop(object):
             if r is not None:
                 r.show_overlay(lines, "Discoveries")
         elif ch == '?':
-            game.between = False
+            game.after = False
             if r is not None:
                 r.show_overlay(HELP_LINES, "Commands")
         elif ch == '^':
-            game.between = False
+            game.after = False
             self.ask_dir(self._trap_id)
         elif ch == 'Q':
-            game.between = False
+            game.after = False
             self.ask_confirm("really quit? (y/n)", self._really_quit)
         elif ch == ')':
-            game.between = False
+            game.after = False
             self._current(game.cur_weapon, "wielding")
         elif ch == ']':
-            game.between = False
+            game.after = False
             self._current(game.cur_armor, "wearing")
         elif ch == '=':
-            game.between = False
+            game.after = False
             self._current(game.cur_ring[LEFT], "wearing (left)")
             self._current(game.cur_ring[RIGHT], "wearing (right)")
         elif ch == 'v':
-            game.between = False
+            game.after = False
             msg(game, "version %s (pygame port)" % RELEASE)
         elif ch == chr(ESCAPE):
             game.door_stop = False
-            game.between = False
+            game.after = False
         else:
-            game.between = False
+            game.after = False
 
     # -- command continuations --------------------------------------------
 
