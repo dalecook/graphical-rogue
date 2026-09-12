@@ -6624,6 +6624,779 @@ def runners_daemon(game, arg=0):
 
 
 # ---------------------------------------------------------------------------
+# Sprites.
+#
+# The deliverable is one file with no external assets, so the artwork cannot
+# be loaded -- it has to BE code.  Each sprite is an 8x12 grid of characters
+# indexing a fixed palette, which is how 8-bit hardware actually stored tiles:
+# a small fixed palette, a low-resolution cell, and colour swaps to get more
+# creatures out of the same silhouette.
+#
+# 8 wide x 12 tall is the classic text-cell ratio (VGA was 8x16, CGA 8x8), and
+# it matches the 80x24 grid Rogue is built around.  Sprites are scaled up with
+# nearest-neighbour so the pixels stay hard-edged instead of blurring.
+# ---------------------------------------------------------------------------
+
+SPRITE_W = 8
+SPRITE_H = 12
+
+# A fixed 16-ish colour palette, in the spirit of the EGA/NES era.
+# '.' is transparent.
+PALETTE = {
+    '.': None,
+    '0': (18, 16, 22),          # black / pupils
+    '1': (34, 30, 40),          # outline
+    '2': (255, 255, 255),       # white
+    '3': (176, 180, 192),       # light grey / steel
+    '4': (96, 100, 114),        # mid grey
+    '5': (214, 66, 66),         # red
+    '6': (128, 32, 32),         # dark red
+    '7': (240, 190, 140),       # skin
+    '8': (158, 102, 54),        # brown
+    '9': (92, 62, 36),          # dark brown
+    'a': (242, 200, 72),        # gold
+    'b': (252, 248, 150),       # pale yellow
+    'c': (104, 200, 104),       # green
+    'd': (40, 112, 64),         # dark green
+    'e': (120, 180, 245),       # pale blue
+    'f': (56, 86, 190),         # blue
+    'g': (186, 112, 222),       # purple
+    'h': (244, 134, 200),       # pink
+    'i': (96, 224, 214),        # cyan
+    'j': (250, 146, 62),        # orange
+    'k': (24, 26, 34),          # floor base
+    'l': (40, 44, 56),          # floor speckle
+    'm': (88, 76, 66),          # brick
+    'n': (56, 48, 42),          # mortar
+    'o': (120, 104, 92),        # brick highlight
+    'p': (46, 40, 32),          # corridor base
+    'q': (66, 56, 44),          # corridor grit
+}
+
+# ---------------------------------------------------------------------------
+# Terrain and items
+# ---------------------------------------------------------------------------
+
+SPRITES = {}
+
+SPRITES[FLOOR] = """
+kkkkkkkk
+kkkkkkkk
+kklkkkkk
+kkkkkkkk
+kkkkkkkl
+kkkkkkkk
+kkkkkkkk
+klkkkkkk
+kkkkkkkk
+kkkkkkkk
+kkkkklkk
+kkkkkkkk
+"""
+
+SPRITES[PASSAGE] = """
+pppppppp
+ppqppppp
+pppppppp
+ppppppqp
+pppppppp
+pqpppppp
+pppppppp
+ppppqppp
+pppppppp
+pppppppp
+pppqpppp
+pppppppp
+"""
+
+SPRITES[HWALL] = """
+oooooooo
+mmmnmmmm
+mmmnmmmm
+nnnnnnnn
+mmmmmmmn
+mmmmmmmn
+nnnnnnnn
+mmmnmmmm
+mmmnmmmm
+nnnnnnnn
+mmmmmmmn
+mmmmmmmn
+"""
+
+SPRITES[VWALL] = """
+mmmnmmmm
+mmmnmmmm
+nnnnnnnn
+mmmmmmmn
+mmmmmmmn
+nnnnnnnn
+mmmnmmmm
+mmmnmmmm
+nnnnnnnn
+mmmmmmmn
+mmmmmmmn
+nnnnnnnn
+"""
+
+SPRITES[DOOR] = """
+nnnnnnnn
+n888888n
+n898898n
+n888888n
+n898898n
+n888888n
+n8888a8n
+n888888n
+n898898n
+n888888n
+n898898n
+nnnnnnnn
+"""
+
+SPRITES[STAIRS] = """
+kkkkkkkk
+kkkkkkkk
+kkkkk333
+kkkkk311
+kkk33333
+kkk31111
+k3333333
+k3111111
+33333333
+31111111
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[TRAP] = """
+kkkkkkkk
+kkkkkkkk
+k333333k
+3k3kk3k3
+3kkkkkk3
+36666663
+36666663
+3kkkkkk3
+3k3kk3k3
+k333333k
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[GOLD] = """
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+kkkabkkk
+kkaabakk
+kkaaaakk
+kabkabkk
+aabaabak
+aaaaaaak
+kaaaaaak
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[POTION] = """
+kkkkkkkk
+kkk33kkk
+kkk33kkk
+kkk11kkk
+kk3113kk
+kk3113kk
+k311113k
+k3hhhh3k
+k3hhhh3k
+k3hhhh3k
+kk3333kk
+kkkkkkkk
+"""
+
+SPRITES[SCROLL] = """
+kkkkkkkk
+kkkkkkkk
+k111111k
+13bbbb31
+13b11b31
+13bbbb31
+13b11b31
+13bbbb31
+13b11b31
+13bbbb31
+k111111k
+kkkkkkkk
+"""
+
+SPRITES[FOOD] = """
+kkkkkkkk
+kkkkkkkk
+kkkkk33k
+kkkk883k
+kkk88853
+kk888853
+k8885553
+k8855553
+k3555533
+kk33333k
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[WEAPON] = """
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+ka3333ak
+kkk88kkk
+kkk88kkk
+kkk88kkk
+kkk99kkk
+kkkkkkkk
+"""
+
+SPRITES[ARMOR] = """
+kkkkkkkk
+k111111k
+1f4444f1
+1f4444f1
+1f4444f1
+1f4444f1
+1f4444f1
+k1f44f1k
+kk1ff1kk
+kkk11kkk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[RING] = """
+kkkkkkkk
+kkkkkkkk
+kkkikkkk
+kkaaakkk
+kkakakkk
+kaakaakk
+kakkkakk
+kakkkakk
+kaakaakk
+kkaaaakk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[STICK] = """
+kkkkkkkk
+kkkkkikk
+kkkkiaik
+kkkkkikk
+kkkk9kkk
+kkk9kkkk
+kkk9kkkk
+kk9kkkkk
+kk9kkkkk
+k9kkkkkk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[AMULET] = """
+kkkkkkkk
+kakkkkak
+kkakkakk
+kkkaakkk
+kkaaaakk
+kagggakk
+kaggggak
+kagggakk
+kkaaaakk
+kkkaakkk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[MAGIC] = """
+kkkkkkkk
+kkkbkkkk
+kkkbkkkk
+kkbbbkkk
+bbbbbbbk
+kkbbbkkk
+kkkbkkkk
+kkkbkkkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES[PLAYER] = """
+kkkkkkkk
+kk3333kk
+k333333k
+k377773k
+k370770k
+k377773k
+kk7777kk
+kffffffk
+7ffffff7
+kffffffk
+kk9kk9kk
+kk9kk9kk
+"""
+
+# ---------------------------------------------------------------------------
+# Monsters, A-Z, in the order Rogue lists them
+# ---------------------------------------------------------------------------
+
+SPRITES['A'] = """
+kkkkkkkk
+kkkkkkkk
+kiiiiikk
+iiiiiiik
+i0ii0iik
+iiiiiiik
+kiiiiiik
+kkiiiikk
+kiikkiik
+kikkkkik
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES['B'] = """
+kkkkkkkk
+9kkkkkk9
+99kkkk99
+999kk999
+99999999
+k995599k
+kk9559kk
+kkk99kkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES['C'] = """
+kkk77kkk
+kk7777kk
+kk7007kk
+kkk77kkk
+ka7777ak
+ka8888ak
+k888888k
+88888888
+88888888
+k8kk8k8k
+k8kk8k8k
+k9kk9k9k
+"""
+
+SPRITES['D'] = """
+kkkkkkkk
+kddkkkkk
+kdddkkkk
+dd5ddkkk
+ddddddkk
+kddddddk
+kkdddddd
+kkddddkd
+kdddddkd
+kddkddkk
+kdkkdkkk
+kkkkkkkk
+"""
+
+SPRITES['E'] = """
+kkkkkkkk
+kkkk88kk
+kkk8008k
+kkkj888k
+kkkk88kk
+kkkk8kkk
+kk8888kk
+k888888k
+k888888k
+kk8888kk
+kkk8k8kk
+kkj8kj8k
+"""
+
+SPRITES['F'] = """
+kkkkkkkk
+kckkkckk
+kcckkcck
+kc2c2cck
+kcc2ccck
+kkccccck
+kkkdddkk
+kkkdddkk
+kkkdddkk
+kkdddddk
+kddddddk
+kkkkkkkk
+"""
+
+SPRITES['G'] = """
+kkkkkkkk
+kkkaakkk
+kka00akk
+kkjaaakk
+kaaaaaak
+aa8888aa
+ka8888ak
+k888888k
+k88kk88k
+k8kkkk8k
+k9kkkk9k
+kkkkkkkk
+"""
+
+SPRITES['H'] = """
+kkkkkkkk
+kkcccckk
+kckccckc
+kcc00cck
+kkcccckk
+kk6666kk
+k666666k
+c666666c
+k666666k
+kk6kk6kk
+kk9kk9kk
+kkkkkkkk
+"""
+
+SPRITES['I'] = """
+kkkkkkkk
+kk2222kk
+k222222k
+k2i22i2k
+k222222k
+ki2222ik
+k222222k
+ki2222ik
+k222222k
+kk2222kk
+kkikkikk
+kkkkkkkk
+"""
+
+SPRITES['J'] = """
+kkkkkkkk
+kgkkkkgk
+kggkkggk
+kgg55ggk
+kggggggk
+gg2gg2gg
+kggggggk
+kkgggggk
+kggkkggk
+kgkkkkgk
+k9kkkk9k
+kkkkkkkk
+"""
+
+SPRITES['K'] = """
+kkkkkkkk
+kkkjjkkk
+kkj00jkk
+kkajjakk
+8kkjjkk8
+88kjjk88
+8j8jj8j8
+k8jjjj8k
+kkjjjjkk
+kkkjjkkk
+kkakakkk
+kkkkkkkk
+"""
+
+SPRITES['L'] = """
+kkkkkkkk
+kkddddkk
+kddddddk
+kk7777kk
+kk7007kk
+kkk77kkk
+kkddddkk
+kddddddk
+kaddddak
+kkddddkk
+kk9kk9kk
+kkkkkkkk
+"""
+
+SPRITES['M'] = """
+kkkkkkkk
+ckckkckc
+kcckkcck
+kkccccck
+kk7777kk
+kk5775kk
+kkk77kkk
+kkcccckk
+kcccccck
+kkccccck
+kkkcckkk
+kkkkkkkk
+"""
+
+SPRITES['N'] = """
+kkkkkkkk
+kkahhakk
+kahhhhak
+kk7777kk
+kk7007kk
+kkk77kkk
+kkhhhhkk
+khhhhhhk
+khhhhhhk
+kkhhhhkk
+kk7kk7kk
+kkkkkkkk
+"""
+
+SPRITES['O'] = """
+kkkkkkkk
+kkddddkk
+kddddddk
+kd5dd5dk
+kd2dd2dk
+kkddddkk
+kddddddk
+8dddddd8
+kddddddk
+kkdkkdkk
+kk9kk9kk
+kkkkkkkk
+"""
+
+SPRITES['P'] = """
+kkkkkkkk
+kkeeeekk
+keeeeeek
+ke0ee0ek
+keeeeeek
+keeeeeek
+keeeeeek
+keeeeeek
+keekeeek
+kkekkekk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES['Q'] = """
+kkkkkkkk
+kkkkkkkk
+kkkkkk8k
+kkkkk808
+kkkkk888
+kk888888
+k2828288
+82828288
+k8888888
+k8kk8k8k
+k8kk8k8k
+k9kk9k9k
+"""
+
+SPRITES['R'] = """
+kkkkkkkk
+kk8kkkkk
+k808kkkk
+k888kkkk
+kk8888kk
+kkkk888k
+kk88888k
+k888kk8k
+k88kkk8k
+k888888k
+kkbbbkkk
+kkkkkkkk
+"""
+
+SPRITES['S'] = """
+kkkkkkkk
+kkkkkkkk
+kkccccck
+kcckkkck
+kckkkkkk
+kcckkkkk
+kkccccck
+kkkkkkcc
+kkkkkkck
+kccccccc
+cc0kkkkk
+kkkkkkkk
+"""
+
+SPRITES['T'] = """
+kkkkkkkk
+kkddddkk
+kddddddk
+kd5dd5dk
+kdd22ddk
+kkddddkk
+dddddddd
+dddddddd
+kddddddk
+kddkkddk
+k9kkkk9k
+kkkkkkkk
+"""
+
+SPRITES['U'] = """
+kkkkkk2k
+kkkkk2kk
+kkkk2kkk
+kkk444kk
+kk45044k
+kk4444kk
+k444444k
+44444444
+44444444
+k4kk4k4k
+k4kk4k4k
+k1kk1k1k
+"""
+
+SPRITES['V'] = """
+kkkkkkkk
+kk1111kk
+k111111k
+k177771k
+k175571k
+kk7227kk
+k611116k
+61111116
+k611116k
+kk1111kk
+kk1kk1kk
+kkkkkkkk
+"""
+
+SPRITES['W'] = """
+kkkkkkkk
+kkk44kkk
+kk4444kk
+k444444k
+k454454k
+k444444k
+k444444k
+kk4444kk
+k4k44k4k
+kkk44kkk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES['X'] = """
+kkkkkkkk
+kkkggkkk
+kkggggkk
+kggggggk
+gg2gg2gg
+kggggggk
+kggggggk
+kkggggkk
+kgkggkgk
+kkkggkkk
+kkkkkkkk
+kkkkkkkk
+"""
+
+SPRITES['Y'] = """
+kkkkkkkk
+kk2222kk
+k222222k
+k2e22e2k
+k222222k
+kk2222kk
+k222222k
+22222222
+k222222k
+k22kk22k
+k2kkkk2k
+kkkkkkkk
+"""
+
+SPRITES['Z'] = """
+kkkkkkkk
+kkddddkk
+kddddddk
+kd0dd0dk
+kddddddk
+kkd11dkk
+kkddddkk
+kddddddk
+dddddddd
+kddkkddk
+kdkkkkdk
+kkkkkkkk
+"""
+
+
+def _rows(art):
+    return [r for r in art.strip("\n").split("\n")]
+
+
+def validate_sprites():
+    """Catch art typos at import time rather than as a blank tile in play."""
+    bad = []
+    for key, art in SPRITES.items():
+        rows = _rows(art)
+        if len(rows) != SPRITE_H:
+            bad.append("%r has %d rows, want %d" % (key, len(rows), SPRITE_H))
+            continue
+        for n, row in enumerate(rows):
+            if len(row) != SPRITE_W:
+                bad.append("%r row %d is %d wide, want %d"
+                           % (key, n, len(row), SPRITE_W))
+            for c in row:
+                if c not in PALETTE:
+                    bad.append("%r row %d uses unknown colour %r" % (key, n, c))
+    if bad:
+        raise ValueError("sprite art errors:\n  " + "\n  ".join(bad))
+    return True
+
+
+def render_sprite(art, w, h, dim=False):
+    """Rasterise one sprite to a Surface of exactly w x h pixels."""
+    rows = _rows(art)
+    surf = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+    surf.fill((0, 0, 0, 0))
+    for y, row in enumerate(rows):
+        for x, c in enumerate(row):
+            rgb = PALETTE.get(c)
+            if rgb is None:
+                continue
+            if dim:
+                rgb = (int(rgb[0] * 0.42), int(rgb[1] * 0.42), int(rgb[2] * 0.42))
+            surf.set_at((x, y), rgb)
+    # plain scale, not smoothscale: nearest-neighbour keeps the pixels crisp,
+    # which is the entire point of the look
+    return pygame.transform.scale(surf, (max(1, w), max(1, h)))
+
+
+def build_sprite_sheet(w, h):
+    """Rasterise every sprite at this cell size, lit and dimmed."""
+    lit = {}
+    dim = {}
+    for key, art in SPRITES.items():
+        lit[key] = render_sprite(art, w, h, dim=False)
+        dim[key] = render_sprite(art, w, h, dim=True)
+    return lit, dim
+
+
+# ---------------------------------------------------------------------------
 # The graphical interface.  This is the one part that is NOT a port -- it
 # replaces curses entirely.  It is a pure function of the Screen buffer, the
 # message queue and the player's stats, so it holds no game state of its own.
@@ -6692,14 +7465,20 @@ def _dim(color, factor=0.42):
 class Renderer(object):
     """Draws the Screen buffer as a tile grid."""
 
-    def __init__(self, game, cell_w=14, headless=False):
+    def __init__(self, game, cell_w=16, headless=False, sprites=True):
         self.game = game
         self.headless = headless
         self.glyph_cache = {}
         self.more_pending = False
 
+        # Sprite mode uses a 2:3 cell so the 8x12 art scales without distortion;
+        # text mode keeps the taller cell a monospace glyph wants.
+        self.sprite_mode = sprites
+        self.sprites = {}
+        self.sprites_dim = {}
+
         self.cell_w = cell_w
-        self.cell_h = int(cell_w * 1.9)
+        self.cell_h = self._cell_height(cell_w)
         w = self.cell_w * NUMCOLS
         h = self.cell_h * NUMLINES
         flags = pygame.RESIZABLE
@@ -6710,6 +7489,27 @@ class Renderer(object):
         self._load_fonts()
         self.overlay = None             # list of lines, or None
         self.overlay_title = ""
+        self._build_sprites()
+
+    def _cell_height(self, cell_w):
+        return int(cell_w * 1.5) if self.sprite_mode else int(cell_w * 1.9)
+
+    def _build_sprites(self):
+        if not self.sprite_mode:
+            self.sprites = {}
+            self.sprites_dim = {}
+            return
+        self.sprites, self.sprites_dim = build_sprite_sheet(self.cell_w,
+                                                            self.cell_h)
+
+    def set_sprite_mode(self, on):
+        """Switch between pixel art and the original glyph grid."""
+        if on == self.sprite_mode:
+            return
+        self.sprite_mode = on
+        self.cell_h = self._cell_height(self.cell_w)
+        self._load_fonts()
+        self._build_sprites()
 
     # -- fonts -------------------------------------------------------------
 
@@ -6732,12 +7532,14 @@ class Renderer(object):
         self.glyph_cache = {}
 
     def resize(self, w, h):
-        cell_w = max(6, min(w // NUMCOLS, int((h // NUMLINES) / 1.9)))
+        ratio = 1.5 if self.sprite_mode else 1.9
+        cell_w = max(6, min(w // NUMCOLS, int((h // NUMLINES) / ratio)))
         if cell_w == self.cell_w:
             return
         self.cell_w = cell_w
-        self.cell_h = int(cell_w * 1.9)
+        self.cell_h = self._cell_height(cell_w)
         self._load_fonts()
+        self._build_sprites()
 
     # -- glyphs ------------------------------------------------------------
 
@@ -6793,7 +7595,65 @@ class Renderer(object):
                 for i, ch in enumerate(more):
                     self.blit_ch(ch, FG_MORE, 0, start + i, x_off, y_off)
 
+    # characters that sit ON the floor rather than being terrain -- these get
+    # a ground tile drawn underneath so entities aren't floating in the void
+    ENTITY_CHARS = set(PLAYER + GOLD + POTION + SCROLL + FOOD + WEAPON
+                       + ARMOR + RING + STICK + AMULET + MAGIC + TRAP
+                       + "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+    def _draw_map_sprites(self, x_off, y_off):
+        game = self.game
+        scr = game.screen
+        cw, chh = self.cell_w, self.cell_h
+        surf = self.screen_surf
+        floor_spr = self.sprites.get(FLOOR)
+        pass_spr = self.sprites.get(PASSAGE)
+        floor_dim = self.sprites_dim.get(FLOOR)
+        pass_dim = self.sprites_dim.get(PASSAGE)
+
+        for row in range(MAP_TOP, MAP_BOTTOM + 1):
+            line = scr.ch[row]
+            so_line = scr.so[row]
+            y = y_off + row * chh
+            for col in range(NUMCOLS):
+                ch = line[col]
+                if ch == ' ':
+                    continue
+                visible = cansee(game, row, col)
+                sheet = self.sprites if visible else self.sprites_dim
+                x = x_off + col * cw
+
+                if ch in self.ENTITY_CHARS:
+                    # ground first, then the thing standing on it
+                    ground = (pass_spr if (game.flat(row, col) & F_PASS)
+                              else floor_spr)
+                    if not visible:
+                        ground = (pass_dim if (game.flat(row, col) & F_PASS)
+                                  else floor_dim)
+                    if ground is not None:
+                        surf.blit(ground, (x, y))
+
+                spr = sheet.get(ch)
+                if spr is None:
+                    # no art for this character -- fall back to the glyph so
+                    # nothing ever silently vanishes off the map
+                    color = TILE_COLORS.get(ch, FG_DEFAULT)
+                    if not visible:
+                        color = _dim(color)
+                    self.blit_ch(ch, color, row, col, x_off, y_off)
+                    continue
+                surf.blit(spr, (x, y))
+
+                if so_line[col]:
+                    # SEEMONST: a detected-but-unseen monster, shown highlighted
+                    glow = pygame.Surface((cw, chh), pygame.SRCALPHA)
+                    glow.fill((120, 80, 160, 70))
+                    surf.blit(glow, (x, y))
+
     def _draw_map(self, x_off, y_off):
+        if self.sprite_mode:
+            self._draw_map_sprites(x_off, y_off)
+            return
         game = self.game
         scr = game.screen
         hero = game.hero
@@ -7571,22 +8431,32 @@ class GameLoop(object):
     OPTIONS = (('t', 'terse', "terse messages"),
                ('j', 'jump', "jump (skip run animation)"),
                ('f', 'see_floor', "show the floor in dark rooms"),
-               ('p', 'passgo', "follow corridors around corners"))
+               ('p', 'passgo', "follow corridors around corners"),
+               ('g', '@sprites', "graphics (off = original characters)"))
+
+    def _option_value(self, attr):
+        if attr == '@sprites':
+            return self.renderer is not None and self.renderer.sprite_mode
+        return getattr(self.game, attr)
 
     def _option_lines(self):
-        game = self.game
         out = ["press the letter to toggle, space to close", ""]
         for key, attr, label in self.OPTIONS:
             out.append("  %s)  %-34s %s"
-                       % (key, label, "on" if getattr(game, attr) else "off"))
+                       % (key, label, "on" if self._option_value(attr) else "off"))
         return out
 
     def _toggle_option(self, ch):
         game = self.game
         for key, attr, _label in self.OPTIONS:
-            if ch == key:
+            if ch != key:
+                continue
+            if attr == '@sprites':
+                if self.renderer is not None:
+                    self.renderer.set_sprite_mode(not self.renderer.sprite_mode)
+            else:
                 setattr(game, attr, not getattr(game, attr))
-                break
+            break
         if self.renderer is not None:
             self.renderer.show_overlay(self._option_lines(), "Options")
 
@@ -7773,11 +8643,11 @@ def selftest(turns, seed):
 # Entry point
 # ---------------------------------------------------------------------------
 
-def play(seed):
+def play(seed, sprites=True):
     pygame.init()
     _init_arrow_keys()
     game = new_game(seed)
-    renderer = Renderer(game)
+    renderer = Renderer(game, sprites=sprites)
     game.renderer = renderer
     loop = GameLoop(game, renderer)
 
@@ -7825,12 +8695,16 @@ def main(argv):
                         help="seed the dungeon for a reproducible game")
     parser.add_argument("--selftest", type=int, metavar="N", default=None,
                         help="run N turns headlessly and exit nonzero on error")
+    parser.add_argument("--ascii", action="store_true",
+                        help="draw the original character grid instead of sprites")
     args = parser.parse_args(argv)
+
+    validate_sprites()      # fail loudly on bad art rather than blank tiles
 
     try:
         if args.selftest is not None:
             return selftest(args.selftest, args.seed)
-        return play(args.seed)
+        return play(args.seed, sprites=not args.ascii)
     except Exception:
         traceback.print_exc()
         return 1
