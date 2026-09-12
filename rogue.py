@@ -2222,7 +2222,7 @@ def msg(game, text=""):
 # messages, which is the whole reason --More-- exists: a second message had
 # nowhere to go, so the game stopped and waited.  That is a 1985 hardware
 # limit, not a design choice, and nothing here has to honour it.
-MSG_LINES = 2
+MSG_LINES = 3
 
 
 def wrap_text(text, width):
