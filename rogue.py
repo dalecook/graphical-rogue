@@ -9284,9 +9284,14 @@ class Renderer(object):
                    10 - arm, st.s_lvl, st.s_exp,
                    HUNGER_NAMES[game.hungry_state]))
         low = st.s_maxhp > 0 and st.s_hpt * 4 <= st.s_maxhp
+        # The warning span is found by content.  Level and gold digits move
+        # the Hp field, so fixed columns (1.0 used 25..39) reddened the wrong
+        # text: "(12)  Str: 16" instead of "Hp: 2(12)".
+        hp_from = text.find("Hp:")
+        hp_to = text.find("  ", hp_from)
         for i, ch in enumerate(text[:NUMCOLS]):
             color = FG_STATUS
-            if low and 25 <= i < 25 + 14:
+            if low and hp_from <= i < hp_to:
                 color = FG_LOWHP
             self.blit_ch(ch, color, row, i, x_off, y_off)
 
@@ -9360,7 +9365,7 @@ HELP_LINES = [
     "q      quaff a potion         r      read a scroll",
     "e      eat food               z      zap a wand or staff",
     "w      wield a weapon         t      throw something",
-    "W      wear armor            T      take armor off",
+    "W      wear armor             T      take armor off",
     "P      put on a ring          R      remove a ring",
     ">      go down a staircase    <      go up a staircase",
     "^      identify a trap        D      list discoveries",
