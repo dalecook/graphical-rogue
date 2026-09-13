@@ -8565,6 +8565,313 @@ def validate_player_layers():
 
 
 # ---------------------------------------------------------------------------
+# Ground sprites for the individual weapons and armours.
+#
+# The screen buffer stores only ')' for a weapon and ']' for an armour -- in
+# the original every weapon really is the same character, so a bow and a
+# two-handed sword are indistinguishable until picked up.  With sprites that
+# just looks like a bug, and it is safe to fix: a weapon's or armour's TYPE is
+# not secret in Rogue.  inv_name() names it outright the moment you have it;
+# only the enchantment is hidden.
+#
+# Potions, scrolls, rings and sticks deliberately do NOT get this treatment.
+# Their appearance is randomised per game and learning which is which is the
+# point, so they keep one generic sprite each.
+#
+# Keys are the map character plus the o_which index -- ")2" is a short bow.
+# Two-character keys can never collide with a real map character.
+# ---------------------------------------------------------------------------
+
+GROUND_WEAPONS = {
+    MACE: """
+kkkkkkkk
+kkkkkkkk
+kkk33kkk
+kk3333kk
+kk3333kk
+kkk33kkk
+kkk99kkk
+kkk99kkk
+kkk99kkk
+kkk99kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    SWORD: """
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+ka3333ak
+kkk88kkk
+kkk88kkk
+kkk88kkk
+kkk99kkk
+kkkkkkkk
+""",
+    BOW: """
+kkkkkkkk
+kkaakkkk
+kakbkkkk
+akkbkkkk
+akkbkkkk
+akkbkkkk
+akkbkkkk
+akkbkkkk
+kakbkkkk
+kkaakkkk
+kkkkkkkk
+kkkkkkkk
+""",
+    ARROW: """
+kkk3kkkk
+kkk3kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kbb9bbkk
+kkb9bkkk
+kkkkkkkk
+kkkkkkkk
+""",
+    DAGGER: """
+kkkkkkkk
+kkkkkkkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kkk33kkk
+kka33akk
+kkk88kkk
+kkk88kkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+""",
+    TWOSWORD: """
+kk3333kk
+kk3333kk
+kk3333kk
+kk3333kk
+kk3333kk
+kk3333kk
+ka3333ak
+kaa88aak
+kkk88kkk
+kkk88kkk
+kkk99kkk
+kkkkkkkk
+""",
+    DART: """
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+kkk3kkkk
+kkk3kkkk
+kkk9kkkk
+kkk9kkkk
+kkb9bkkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+""",
+    SHIRAKEN: """
+kkkkkkkk
+kkkkkkkk
+kkk33kkk
+kk3333kk
+33333333
+33333333
+kk3333kk
+kkk33kkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+kkkkkkkk
+""",
+    SPEAR: """
+kkk3kkkk
+kk333kkk
+kkk3kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkk9kkkk
+kkkkkkkk
+""",
+}
+
+# All the armours share a breastplate silhouette and differ by their weave,
+# the same patterns the hero wears, so the two readings agree.
+GROUND_ARMORS = {
+    LEATHER: """
+kkkkkkkk
+kkkkkkkk
+k9kkkk9k
+k999999k
+k999999k
+k999999k
+k999999k
+k999999k
+kk9999kk
+kkk99kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    RING_MAIL: """
+kkkkkkkk
+kkkkkkkk
+k4kkkk4k
+k434343k
+k343434k
+k434343k
+k343434k
+k434343k
+kk3434kk
+kkk43kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    STUDDED_LEATHER: """
+kkkkkkkk
+kkkkkkkk
+k9kkkk9k
+k939393k
+k393939k
+k939393k
+k393939k
+k939393k
+kk3939kk
+kkk93kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    SCALE_MAIL: """
+kkkkkkkk
+kkkkkkkk
+k3kkkk3k
+k344443k
+k433334k
+k344443k
+k433334k
+k344443k
+kk4334kk
+kkk34kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    CHAIN_MAIL: """
+kkkkkkkk
+kkkkkkkk
+k3kkkk3k
+k333333k
+k343434k
+k333333k
+k343434k
+k333333k
+kk3434kk
+kkk33kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    SPLINT_MAIL: """
+kkkkkkkk
+kkkkkkkk
+k3kkkk3k
+k3k3k33k
+k3k3k33k
+k3k3k33k
+k3k3k33k
+k3k3k33k
+kk3k33kk
+kkk33kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    BANDED_MAIL: """
+kkkkkkkk
+kkkkkkkk
+k3kkkk3k
+k333333k
+k444444k
+k333333k
+k444444k
+k333333k
+kk4444kk
+kkk33kkk
+kkkkkkkk
+kkkkkkkk
+""",
+    PLATE_MAIL: """
+kkkkkkkk
+kkkkkkkk
+k2kkkk2k
+k222222k
+k222222k
+k222222k
+k222222k
+k322223k
+kk2222kk
+kkk22kkk
+kkkkkkkk
+kkkkkkkk
+""",
+}
+
+
+def ground_key(type_ch, which):
+    """The sprite key for a specific weapon or armour on the floor."""
+    return "%s%d" % (type_ch, which)
+
+
+def register_ground_sprites():
+    """Fold the per-type art into SPRITES so it gets built, dimmed and
+    validated exactly like every other sprite."""
+    for which, art in GROUND_WEAPONS.items():
+        SPRITES[ground_key(WEAPON, which)] = art
+    for which, art in GROUND_ARMORS.items():
+        SPRITES[ground_key(ARMOR, which)] = art
+    return True
+
+
+def validate_ground_sprites():
+    """Every weapon and armour the game can generate needs floor art, and it
+    must not be identical to the generic fallback."""
+    bad = []
+    for i in range(MAXWEAPONS):
+        if i not in GROUND_WEAPONS:
+            bad.append("no ground art for weapon %d (%s)" % (i, WEAPONS[i]['name']))
+        # Matching the old generic sprite is fine and expected -- that sprite
+        # was a sword, so the long sword SHOULD look like it.  What matters is
+        # that the nine weapons differ from each other, checked below.
+    for i in range(MAXARMORS):
+        if i not in GROUND_ARMORS:
+            bad.append("no ground art for armor %d (%s)" % (i, ARMORS[i]['name']))
+    seen = {}
+    for name, table in (("weapon", GROUND_WEAPONS), ("armor", GROUND_ARMORS)):
+        for i, art in table.items():
+            if art in seen:
+                bad.append("%s %d looks identical to %s" % (name, i, seen[art]))
+            seen[art] = "%s %d" % (name, i)
+    if bad:
+        raise ValueError("ground sprite errors:\n  " + "\n  ".join(bad))
+    return True
+
+
+register_ground_sprites()
+
+
+# ---------------------------------------------------------------------------
 # The graphical interface.  This is the one part that is NOT a port -- it
 # replaces curses entirely.  It is a pure function of the Screen buffer, the
 # message queue and the player's stats, so it holds no game state of its own.
@@ -8819,6 +9126,12 @@ class Renderer(object):
         x_off = (surf.get_width() - w) // 2
         y_off = (surf.get_height() - h) // 2
 
+        # what is lying where, so ')' can be drawn as the actual weapon.
+        # Built once a frame rather than scanning lvl_obj per tile.
+        self._obj_at = {}
+        for obj in game.lvl_obj:
+            self._obj_at[(obj.o_pos.y, obj.o_pos.x)] = obj
+
         self._draw_message(x_off, y_off)
         self._draw_map(x_off, y_off)
         self._draw_status(x_off, y_off, h)
@@ -8881,6 +9194,11 @@ class Renderer(object):
                 spr = None
                 if ch == PLAYER:
                     spr = self.player_sprite(player_loadout(game))
+                elif ch == WEAPON or ch == ARMOR:
+                    # the buffer only says "a weapon"; ask the level what kind
+                    obj = self._obj_at.get((row, col))
+                    if obj is not None and obj.o_type == ch:
+                        spr = sheet.get(ground_key(ch, obj.o_which))
                 mon = game.moat(row, col)
                 if mon is not None and ch in self._MONSTER_LETTERS:
                     # Animate only a monster that is actually awake.  This is
@@ -10083,6 +10401,7 @@ def main(argv):
     validate_sprites()      # fail loudly on bad art rather than blank tiles
     validate_frame_b()
     validate_player_layers()
+    validate_ground_sprites()
 
     try:
         if args.selftest is not None:
