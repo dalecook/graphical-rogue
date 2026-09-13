@@ -6,3 +6,8 @@ build/
 Thumbs.db
 __pycache__/
 *.pyc
+
+# The process journal is deliberately NOT published.  It lives in its own git
+# repo at docs/.git so it is still versioned locally; this repo must never
+# track it again.  See docs/journal/README.md.
+docs/
