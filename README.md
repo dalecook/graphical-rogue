@@ -1,6 +1,6 @@
 # Rogue
 
-**Version 1.0**
+**Version 1.0.1**
 
 A graphical port of **Rogue 5.4.5** — the original 1980s dungeon crawl — to Python
 and pygame, in a single file with no assets.
@@ -25,7 +25,7 @@ Everything lives in `rogue.py`: ~10,400 lines, one file, no data files, no
 images, no external fonts.
 
 Two version numbers appear and they mean different things: **5.4.5** is the
-Rogue being ported, **1.0** is this port. In game, `v` reports both.
+Rogue being ported, **1.0.1** is this port. In game, `v` reports both.
 
 ## Running it
 
