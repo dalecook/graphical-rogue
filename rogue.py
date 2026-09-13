@@ -10357,6 +10357,10 @@ def play(seed, sprites=True):
                     if ended_shown:
                         running = False
                     continue
+                if game.no_command:
+                    # command.c:71 -- the C reads no input while the hero is
+                    # frozen or asleep; those turns play out on their own below.
+                    continue
                 ch = event_to_char(event)
                 if ch is None:
                     continue
@@ -10381,7 +10385,8 @@ def play(seed, sprites=True):
             held_key = held_ch = None
             halted = None
 
-        if game.playing and loop.pending is None and game.running:
+        if (game.playing and loop.pending is None
+                and (game.running or game.no_command)):
             loop.auto_step()
 
         if not game.playing and not ended_shown:
