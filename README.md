@@ -1,5 +1,7 @@
 # Rogue
 
+**Version 1.0**
+
 A graphical port of **Rogue 5.4.5** — the original 1980s dungeon crawl — to Python
 and pygame, in a single file with no assets.
 
@@ -9,10 +11,11 @@ and pygame, in a single file with no assets.
 
 This is a *port*, not a tribute. The dungeon generator, the monster tables, the
 combat formulas, the item probabilities and the daemon/fuse scheduler are all
-carried across value-for-value from the authentic Rogue 5.4.5 C source released
-by the Roguelike Restoration Project — the final UNIX version by Michael Toy,
-Ken Arnold and Glenn Wichman. Where the C does something odd, the odd thing is
-ported and a comment says so.
+carried across value-for-value from the authentic
+[Rogue 5.4.5 C source](https://github.com/RoguelikeRestorationProject/rogue5.4)
+released by the Roguelike Restoration Project — the final UNIX version by
+Michael Toy, Ken Arnold and Glenn Wichman. Where the C does something odd,
+the odd thing is ported and a comment says so.
 
 What is new is the presentation. curses is replaced by a pygame tile grid, and
 the artwork is 61 hand-drawn 8×12 sprites — 26 animated monsters, a hero who
@@ -20,6 +23,9 @@ wears what he is actually carrying, and every weapon and armour drawn as itself.
 
 Everything lives in `rogue.py`: ~10,400 lines, one file, no data files, no
 images, no external fonts.
+
+Two version numbers appear and they mean different things: **5.4.5** is the
+Rogue being ported, **1.0** is this port. In game, `v` reports both.
 
 ## Running it
 

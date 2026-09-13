@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rogue -- Exploring the Dungeons of Doom.  A graphical pygame port.
+Rogue -- Exploring the Dungeons of Doom.  A graphical pygame port, v1.0.
 
 This is a faithful port of the authentic Rogue 5.4.5 C source released by the
 Roguelike Restoration Project, which is the final UNIX version of the original
@@ -60,8 +60,12 @@ import pygame
 # Constants, ported from rogue.h
 # ---------------------------------------------------------------------------
 
+# Two different version numbers, and they must not be confused:
+#   RELEASE      the version of Rogue being ported (from the C, vers.c)
+#   PORT_VERSION the version of THIS port
 RELEASE = "5.4.5"
-VERSION = "rogue (pygame port) of rogue 5.4.5"
+PORT_VERSION = "1.0"
+VERSION = "Rogue %s, pygame port %s" % (RELEASE, PORT_VERSION)
 
 MAXDAEMONS = 20                 # rogue.h:19
 EMPTY = 0
@@ -9853,7 +9857,7 @@ class GameLoop(object):
             self._current(game.cur_ring[RIGHT], "wearing (right)")
         elif ch == 'v':
             game.after = False
-            msg(game, "version %s (pygame port)" % RELEASE)
+            msg(game, "%s" % VERSION)
         elif ch in ('f', 'F'):
             # command.c:222 -- fight an adjacent monster, F to the death
             if ch == 'F':
