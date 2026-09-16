@@ -9253,7 +9253,8 @@ class Renderer(object):
                         pygame.Rect(x_off + col * self.cell_w,
                                     y_off + (row + MAP_ROW_OFFSET) * self.cell_h,
                                     self.cell_w, self.cell_h))
-                    self.blit_ch(ch, TILE_COLORS[PLAYER], row, col, x_off, y_off)
+                    self.blit_ch(ch, TILE_COLORS[PLAYER], row + MAP_ROW_OFFSET,
+                                 col, x_off, y_off)
                     continue
                 if ch.isalpha() and ch.isupper():
                     color = _monster_color(ch)
