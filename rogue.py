@@ -9475,7 +9475,13 @@ class GameLoop(object):
         if not game.playing:
             return False
 
-        if self.renderer is not None and self.renderer.overlay is not None:
+        # A visible overlay swallows the next key -- except the options menu,
+        # which IS the overlay and has to read the key that toggles a setting.
+        # Swallowing it there ate every other keypress: 'g' needed pressing
+        # twice, and a movement key only flipped the menu off and on again.
+        if (self.renderer is not None and self.renderer.overlay is not None
+                and not (self.pending is not None
+                         and self.pending[0] == 'option')):
             self.renderer.clear_overlay()
             return False
 
