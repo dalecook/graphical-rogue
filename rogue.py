@@ -64,7 +64,7 @@ import pygame
 #   RELEASE      the version of Rogue being ported (from the C, vers.c)
 #   PORT_VERSION the version of THIS port
 RELEASE = "5.4.5"
-PORT_VERSION = "1.0.1"
+PORT_VERSION = "1.0.2"
 VERSION = "Rogue %s, pygame port %s" % (RELEASE, PORT_VERSION)
 
 MAXDAEMONS = 20                 # rogue.h:19
