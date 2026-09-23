@@ -10049,7 +10049,7 @@ class GameLoop(object):
     def _option_lines(self):
         out = ["press the letter to toggle, space to close", ""]
         for key, attr, label in self.OPTIONS:
-            out.append("  %s)  %-34s %s"
+            out.append("  %s)  %-36s %s"
                        % (key, label, "on" if self._option_value(attr) else "off"))
         return out
 
